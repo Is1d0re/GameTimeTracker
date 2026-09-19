@@ -12,6 +12,9 @@
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" href="./icons/icon-192.png">
   <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@700;800&family=Barlow:wght@400;600&display=swap">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -28,8 +31,9 @@
       <h2>Roster</h2>
       <span id="attendance-summary" class="muted"></span>
     </div>
-    <p class="hint">Tap a name to mark present / absent. Tap ✎ to rename. GK = willing to play keeper.</p>
+    <p class="hint">Tap a name to mark who's here today. Tap ✎ to rename. Tap GK for players who can play keeper.</p>
     <ul id="roster" class="roster"></ul>
+    <p id="gk-hint" class="hint"></p>
   </div>
 
   <div class="card" id="starters-card" hidden>
@@ -37,12 +41,16 @@
       <h2>Starters</h2>
       <span id="starters-summary" class="muted"></span>
     </div>
-    <p class="hint">Optional — tap up to 7 players to start on the field. Anyone you don't pick is filled in by the plan.</p>
+    <p class="hint">Optional. Tap up to 7 players to start on the field; the plan fills in the rest.</p>
+    <p id="starters-note" class="hint"></p>
+    <div class="actions tight">
+      <button class="secondary" id="btn-starters-suggest">Suggest starters</button>
+      <button class="link" id="btn-starters-clear">Clear</button>
+    </div>
     <div id="starters" class="chips"></div>
     <div class="row">
       <label for="start-gk" class="label">Starting keeper</label>
       <select id="start-gk"></select>
-      <button class="link small-link" id="btn-starters-clear">Clear</button>
     </div>
   </div>
 
@@ -91,14 +99,16 @@
     </div>
   </header>
 
-  <div id="banner" class="banner" hidden>
-    <div id="banner-title" class="banner-title"></div>
-    <div id="banner-body" class="banner-body"></div>
-    <div class="banner-actions">
+  <!-- The sub board: lit up when it's time to sub, quiet while previewing the next one -->
+  <div id="banner" class="board now" hidden>
+    <div class="board-strip"><span id="banner-title"></span><span class="muted">Sub now</span></div>
+    <div id="banner-body"></div>
+    <div class="board-actions">
       <button id="banner-apply" class="primary">Apply</button>
       <button id="banner-dismiss" class="link">Dismiss</button>
     </div>
   </div>
+  <div id="clock-preview" class="board quiet" hidden></div>
 
   <div class="columns">
     <div class="col">
@@ -111,7 +121,20 @@
       <button id="btn-suggest" class="secondary small">Suggest a sub</button>
     </div>
   </div>
-  <p class="hint center">Tap a bench player, then a field player to swap. Tap GK on a field player to make them keeper.</p>
+  <p class="hint center" id="game-hint">Tap a bench player, then a field player to swap. Tap GK on a field player to make them keeper.</p>
+
+  <div class="actions">
+    <button class="secondary" id="btn-edit-mode">Edit next sub</button>
+    <button class="secondary" id="btn-live-plan">Show plan</button>
+  </div>
+  <div class="card" id="live-plan-card" hidden>
+    <div class="card-title">
+      <h2>Plan from here</h2>
+      <span class="muted">based on minutes so far</span>
+    </div>
+    <div class="scroll-x"><table id="live-plan-grid" class="plan"></table></div>
+    <ol id="live-plan-swaps" class="swaps"></ol>
+  </div>
 </section>
 
 <!-- ============ SUMMARY ============ -->
@@ -134,12 +157,40 @@
     <h1>Season</h1>
   </header>
   <div class="card">
-    <p class="hint">Minutes above (+) or below (−) the fair share, summed over saved games. Players below zero get priority next game.</p>
+    <p class="hint">Minutes above (+) or below (−) each player's fair share, added up over saved games. Players below zero start first next game.</p>
     <table id="season-table" class="summary"></table>
     <p id="season-games" class="muted"></p>
   </div>
+  <div class="card">
+    <h2>Games</h2>
+    <ul id="game-list" class="roster games"></ul>
+  </div>
   <div class="actions">
     <button class="link danger" id="btn-season-reset">Reset season</button>
+  </div>
+</section>
+
+<!-- ============ GAME DETAIL ============ -->
+<section id="view-gamedetail" class="view" hidden>
+  <header class="bar">
+    <button class="link" id="btn-gd-back">‹ Season</button>
+    <h1 id="gd-title">Game</h1>
+  </header>
+  <div class="card">
+    <p id="gd-meta" class="muted"></p>
+    <table id="gd-table" class="summary"></table>
+  </div>
+  <div class="card">
+    <div class="card-title"><h2>What happened</h2><span class="muted">actual lineups</span></div>
+    <div class="scroll-x"><table id="gd-actual-grid" class="plan"></table></div>
+    <ol id="gd-log" class="swaps"></ol>
+  </div>
+  <div class="card">
+    <div class="card-title"><h2>Pre-game plan</h2><span class="muted">as suggested at kickoff</span></div>
+    <div class="scroll-x"><table id="gd-plan-grid" class="plan"></table></div>
+  </div>
+  <div class="actions">
+    <button class="link danger" id="btn-gd-delete">Delete this game</button>
   </div>
 </section>
 

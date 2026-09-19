@@ -18,8 +18,9 @@ const DEFAULT_NAMES = ['Alvi', 'Kamryn', 'Ezra', 'Mason', 'Milan', 'Anthony', 'R
 function defaultState() {
   return {
     roster: Array.from({ length: ROSTER_SIZE }, (_, i) => ({
-      id: 'p' + i, name: DEFAULT_NAMES[i] || 'Player ' + (i + 1), gk: true, present: true,
+      id: 'p' + i, name: DEFAULT_NAMES[i] || 'Player ' + (i + 1), gk: false, present: true,
     })),
+    v: 2,
     subsPerHalf: 3,
     starters: [],     // ids the coach wants on at kickoff (optional, up to 7)
     startGk: null,    // starting keeper (optional; must be a starter)
@@ -35,7 +36,13 @@ let state = load();
 function load() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) return Object.assign(defaultState(), JSON.parse(raw));
+    if (raw) {
+      const saved = JSON.parse(raw);
+      const st = Object.assign(defaultState(), saved);
+      // v2: keeper flag defaults to off; clear the old all-on default
+      if (!saved.v) { st.roster.forEach(p => { p.gk = false; }); st.v = 2; }
+      return st;
+    }
   } catch (e) { /* ignore */ }
   return defaultState();
 }
@@ -84,15 +91,17 @@ function fmtMin(min) { return fmtClock(min); }
 //   gk         – current keeper (mid-game replans)
 //   h1gk, h2gk – keeper planned for each half (null = choose)
 //   starters   – ids the coach wants on the field at kickoff (block 0 only; up to 7)
+//   played     – ids that have already played this game (mid-game replans)
 //   gkEligible – Set of ids willing to keep
 // Returns { blocks: [{ index, half, start, end, on, gk, bench }], projected, h1gk, h2gk }
 //
-// Keepers play a whole half. The second-half keeper is chosen up front and carries a
-// virtual credit during first-half planning so the greedy benches them enough to make
-// room for their full second half. One extra handoff is allowed if a keeper would
-// otherwise end up a full block ahead of the player they displace.
+// Keepers play a whole half. The second-half keeper is chosen up front; once they have
+// had one stint in the first half they carry a virtual credit so the greedy benches them
+// enough to make room for their full second half (letting them play first keeps the first
+// sub a full line change). One extra handoff is allowed if a keeper would otherwise end
+// up a full block ahead of the player they displace.
 // ============================================================
-function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], gkEligible }) {
+function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], played = [], gkEligible }) {
   const B = blockCount(S), L = blockLen(S);
   const n = ids.length;
   const mins = {};
@@ -126,14 +135,18 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
   const target = (GAME_MIN * ON_FIELD) / n;
   const othersH1 = n > 2 ? (HALF_MIN * ON_FIELD - HALF_MIN - (target - HALF_MIN)) / (n - 2) : 0;
   const h2Credit = Math.max(0, othersH1 - (target - HALF_MIN));
+  const seen = new Set([...played, ...on].filter(id => ids.includes(id)));
 
   for (let b = fromBlock; b < B; b++) {
     const half = b <= S ? 1 : 2;
     const firstOfHalf = b === 0 || b === S + 1;
-    const credit = id => (half === 1 && id === secondGk && secondGk !== firstGk ? h2Credit : 0);
+    const credit = id => (half === 1 && id === secondGk && secondGk !== firstGk && seen.has(id) ? h2Credit : 0);
     const key = id => Math.round((mins[id] + credit(id)) * 2) / 2; // tie within 30s
+    // On ties, prefer players coming off the bench so each sub round is a full line change
+    // (the whole bench comes on). At kickoff the tie-break favours the coach's starters instead.
+    const fresh = (a, c) => (b === 0 ? on.has(c) - on.has(a) : on.has(a) - on.has(c));
     const sorted = [...ids].sort((a, c) =>
-      key(a) - key(c) || (on.has(c) - on.has(a)) || order.get(a) - order.get(c));
+      key(a) - key(c) || fresh(a, c) || order.get(a) - order.get(c));
     let lineup = sorted.slice(0, ON_FIELD);
     const locked = new Set(b === 0 ? kickoff : []);
     if (locked.size) lineup = [...kickoff, ...sorted.filter(id => !locked.has(id))].slice(0, ON_FIELD);
@@ -179,7 +192,7 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
       index: b, half, start: b * L, end: (b + 1) * L,
       on: lineup, gk: nextGk, bench: ids.filter(id => !lineup.includes(id)),
     });
-    lineup.forEach(id => { mins[id] += L; });
+    lineup.forEach(id => { mins[id] += L; seen.add(id); });
     on = new Set(lineup);
     curGk = nextGk;
   }
@@ -201,7 +214,7 @@ function diffLineups(prevOn, prevGk, next) {
 // Helpers on state
 // ============================================================
 const byId = id => state.roster.find(p => p.id === id);
-const nameOf = id => (byId(id) || { name: '?' }).name;
+const nameOf = id => (window.__nameOverride ? window.__nameOverride(id) : (byId(id) || { name: '?' }).name);
 const presentIds = () => state.roster.filter(p => p.present).map(p => p.id);
 const gkEligibleSet = () => new Set(state.roster.filter(p => p.gk).map(p => p.id));
 // Carry-over is "minutes above fair share" — players who are ahead start with a head start
@@ -248,7 +261,20 @@ function newGame() {
   const first = plan.blocks[0];
   first.on.forEach(id => { players[id].onField = true; players[id].onSinceMs = 0; });
   g.gk = first.gk; g.h1gk = plan.h1gk; g.h2gk = plan.h2gk;
+  g.plan = plan.blocks.map(b => ({ index: b.index, on: b.on, gk: b.gk }));
+  g.log = [];
+  logLineup();
   save();
+}
+
+// Append the current lineup to the game log (skipped if unchanged from the last entry)
+function logLineup() {
+  const g = state.game;
+  if (!g) return;
+  const on = Object.keys(g.players).filter(id => g.players[id].onField).sort();
+  const last = g.log[g.log.length - 1];
+  if (last && last.gk === g.gk && last.on.join() === on.join()) return;
+  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, on, gk: g.gk });
 }
 
 function elapsedMs() {
@@ -338,6 +364,8 @@ function tick() {
   }
 }
 
+const playedIds = ids => ids.filter(id => playedMs(id) > 0);
+
 function currentMinutes() {
   const g = state.game;
   const ids = Object.keys(g.players);
@@ -347,23 +375,61 @@ function currentMinutes() {
   return m;
 }
 
+// Coach override for the upcoming sub: { block, off: [ids], on: [ids] }. Only valid for
+// that block; ids that have since changed sides are dropped.
+function validOverride(target, onField, ids) {
+  const ov = state.game.nextOverride;
+  if (!ov || ov.block !== target) return null;
+  return {
+    off: ov.off.filter(id => onField.includes(id)),
+    on: ov.on.filter(id => ids.includes(id) && !onField.includes(id)),
+  };
+}
+
+// Keeper for a manually built lineup: planned half keeper if on, else current keeper if
+// still on, else the lowest-minute eligible player in the lineup.
+function pickGk(target, lineup, gk, minutes) {
+  const g = state.game, S = g.subsPerHalf;
+  if (target === S + 1 && lineup.includes(g.h2gk)) return g.h2gk;
+  if (gk && lineup.includes(gk)) return gk;
+  let elig = lineup.filter(id => gkEligibleSet().has(id));
+  if (!elig.length) elig = lineup;
+  return elig.sort((a, c) => minutes[a] - minutes[c])[0] || null;
+}
+
+// The sub to make at the start of `target`, given the lineup and credited minutes at that
+// moment. Honours a coach override; otherwise asks the planner.
+function subForBlock(target, ids, onField, gk, minutes) {
+  const g = state.game, S = g.subsPerHalf;
+  const ov = validOverride(target, onField, ids);
+  if (ov) {
+    const on2 = onField.filter(id => !ov.off.includes(id)).concat(ov.on);
+    const gk2 = pickGk(target, on2, gk, minutes);
+    const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)) };
+    return { block, diff: { off: ov.off, on: ov.on, gk: gk2 !== gk ? gk2 : null }, manual: true, plan: null };
+  }
+  const plan = planFrom({
+    ids, S, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids), gkEligible: gkEligibleSet(),
+  });
+  if (!plan.blocks.length) return null;
+  return { block: plan.blocks[0], diff: diffLineups(onField, gk, plan.blocks[0]), manual: false, plan };
+}
+
 function suggestForBlock(b, title) {
   const g = state.game;
   const ids = presentIds().filter(id => g.players[id]);
-  const plan = planFrom({
-    ids, S: g.subsPerHalf, minutes: currentMinutes(), fromBlock: b,
-    onField: ids.filter(id => g.players[id].onField), gk: g.gk, h1gk: g.h1gk, h2gk: g.h2gk,
-    gkEligible: gkEligibleSet(),
-  });
-  const next = plan.blocks[0];
-  if (!next) return;
-  g.h2gk = plan.h2gk;
-  const d = diffLineups(ids.filter(id => g.players[id].onField), g.gk, next);
+  const onField = ids.filter(id => g.players[id].onField);
+  const sub = subForBlock(b, ids, onField, g.gk, currentMinutes());
+  if (!sub) return;
+  if (sub.plan) g.h2gk = sub.plan.h2gk;
+  const d = sub.diff;
   if (!d.off.length && !d.on.length && !d.gk) {
-    g.pending = { title, off: [], on: [], gk: null, note: 'No change needed — lineup is already balanced.' };
+    g.pending = { title, off: [], on: [], gk: null, note: 'No change needed. The lineup is already balanced.', block: b };
   } else {
-    g.pending = { title, off: d.off, on: d.on, gk: d.gk };
+    g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, block: b };
   }
+  if (g.nextOverride && g.nextOverride.block <= b) g.nextOverride = null;
+  g.editNext = false;
 }
 
 function applyPending() {
@@ -374,6 +440,7 @@ function applyPending() {
   if (p.gk) g.gk = p.gk;
   if (g.phase === 'h1' && g.gk) g.h1gk = g.gk;
   g.pending = null; g.selected = null;
+  logLineup();
   save();
 }
 
@@ -382,11 +449,11 @@ function adHocSuggestion() {
   const ids = presentIds().filter(id => g.players[id]);
   const bench = ids.filter(id => !g.players[id].onField).sort((a, c) => playedMin(a) - playedMin(c));
   const field = ids.filter(id => g.players[id].onField && id !== g.gk).sort((a, c) => playedMin(c) - playedMin(a));
-  if (!bench.length) return { title: 'No subs available', off: [], on: [], gk: null, note: 'Everyone present is on the field.' };
+  if (!bench.length) return { title: 'No subs available', off: [], on: [], gk: null, note: 'Everyone here is already on the field.' };
   if (!field.length) return null;
   const inId = bench[0], outId = field[0];
   if (playedMin(inId) >= playedMin(outId) - 0.25) {
-    return { title: 'Already balanced', off: [], on: [], gk: null, note: 'Bench players have as many minutes as the field. Wait for the next scheduled sub.' };
+    return { title: 'Already balanced', off: [], on: [], gk: null, note: 'The bench has as many minutes as the field. Wait for the next scheduled sub.' };
   }
   return { title: 'Suggested sub', off: [outId], on: [inId], gk: null };
 }
@@ -407,14 +474,33 @@ function finalMinutes() {
 }
 
 function saveToSeason() {
+  const g = state.game;
   const minutes = finalMinutes();
   const shares = fairShares();
-  Object.keys(minutes).forEach(id => {
-    state.carryOver[id] = (state.carryOver[id] || 0) + (minutes[id] - shares[id]);
+  const ids = Object.keys(minutes);
+  const avail = {}, names = {};
+  ids.forEach(id => { avail[id] = availableMin(id); names[id] = nameOf(id); });
+  state.history.push({
+    id: 'g' + Date.now(),
+    date: new Date().toISOString().slice(0, 10),
+    subsPerHalf: g.subsPerHalf,
+    players: ids, names, minutes, shares, avail,
+    h1gk: g.h1gk, h2gk: g.h2gk,
+    plan: g.plan || [], log: g.log || [],
   });
-  state.history.push({ date: new Date().toISOString().slice(0, 10), minutes, shares });
+  recomputeCarryOver();
   state.game = null;
+  state.starters = []; state.startGk = null; // starters are a per-game choice
   save();
+}
+
+// Carry-over is always derived from saved games so deleting one stays consistent
+function recomputeCarryOver() {
+  const c = {};
+  state.history.forEach(h => {
+    Object.keys(h.minutes).forEach(id => { c[id] = (c[id] || 0) + (h.minutes[id] - (h.shares[id] || 0)); });
+  });
+  state.carryOver = c;
 }
 
 // ============================================================
@@ -454,7 +540,7 @@ document.addEventListener('visibilitychange', () => {
 // UI: views
 // ============================================================
 const $ = id => document.getElementById(id);
-const views = ['setup', 'game', 'summary', 'season'];
+const views = ['setup', 'game', 'summary', 'season', 'gamedetail'];
 function show(view) {
   views.forEach(v => { $('view-' + v).hidden = v !== view; });
   window.scrollTo(0, 0);
@@ -465,8 +551,11 @@ function renderSetup() {
   const ids = presentIds();
   const S = state.subsPerHalf;
   const n = ids.length, subs = Math.max(0, n - ON_FIELD);
-  $('attendance-summary').textContent = n + ' present · ' + subs + ' sub' + (subs === 1 ? '' : 's') +
-    (n >= ON_FIELD ? ' · ~' + fmtMin(fairTarget(n)) + ' each' : '');
+  $('attendance-summary').textContent = n + ' here, ' + subs + ' sub' + (subs === 1 ? '' : 's') +
+    (n >= ON_FIELD ? ', about ' + fmtMin(fairTarget(n)) + ' each' : '');
+  const gkCount = state.roster.filter(p => p.present && p.gk).length;
+  $('gk-hint').textContent = gkCount === 0 ? 'No keepers marked, so anyone here may be put in goal.' :
+    gkCount === 1 ? 'Only one keeper marked. They will be in goal all game.' : '';
 
   const ul = $('roster');
   ul.innerHTML = '';
@@ -486,8 +575,8 @@ function renderSetup() {
   $('subs-plus').disabled = S >= MAX_SUBS;
   const times = subTimesInHalf(S);
   const water = waterBreakInHalf(S);
-  $('subs-schedule').textContent = 'Each half: subs at ' + times.map(t => fmtClock(t) + (t === water ? ' (water)' : '')).join(', ') +
-    ' · blocks of ' + fmtClock(blockLen(S));
+  $('subs-schedule').textContent = 'Subs at ' + times.map(t => fmtClock(t) + (t === water ? ' (water break)' : '')).join(', ') +
+    ' in each half. Shifts of ' + fmtClock(blockLen(S)) + '.';
   renderStarters();
 
   if (n >= ON_FIELD) {
@@ -497,8 +586,8 @@ function renderSetup() {
     const lo = Math.min(...game), hi = Math.max(...game);
     $('subs-fairness').textContent = subs === 0
       ? 'No subs — everyone plays the full game; keeper rotates at halftime.'
-      : 'Projected this game: ' + fmtMin(lo) + '–' + fmtMin(hi) + ' each (gap ' + fmtClock(hi - lo) + ')' +
-        (hi - lo > blockLen(S) + 0.01 ? ' — carry-over is balancing earlier games' : '');
+      : 'Everyone plays ' + fmtMin(lo) + '–' + fmtMin(hi) + ' this game (gap of ' + fmtClock(hi - lo) + ').' +
+        (hi - lo > blockLen(S) + 0.01 ? ' The gap is wider because earlier games are being balanced.' : '');
   } else {
     $('subs-fairness').textContent = '';
   }
@@ -518,8 +607,24 @@ function renderStarters() {
   const card = $('starters-card');
   if (ids.length < ON_FIELD) { card.hidden = true; return; }
   card.hidden = false;
-  $('starters-summary').textContent = chosen.length + '/' + ON_FIELD + ' picked' +
-    (chosen.length < ON_FIELD ? ' · rest chosen automatically' : '');
+  $('starters-summary').textContent = chosen.length ? chosen.length + '/' + ON_FIELD + ' picked' +
+    (chosen.length < ON_FIELD ? ' · rest chosen automatically' : '') : 'auto';
+  // What the plan would do on its own, and whether the coach's picks bench anyone who is owed minutes
+  const auto = planFrom(Object.assign(kickoffPlanInputs(), { starters: [], h1gk: null })).blocks[0].on;
+  const seed = seedMinutes(ids);
+  const owed = ids.filter(id => seed[id] < -0.5 && !chosen.includes(id)).sort((a, c) => seed[a] - seed[c]);
+  const note = $('starters-note');
+  if (!chosen.length) {
+    note.textContent = 'The plan will start ' + auto.map(nameOf).join(', ') + '.' +
+      (state.useCarryOver && ids.some(id => seed[id] < -0.5) ? ' Players owed minutes from earlier games go first.' : '');
+    note.classList.remove('warn-text');
+  } else if (chosen.length >= ON_FIELD && owed.length && state.useCarryOver) {
+    note.textContent = owed.map(nameOf).join(', ') + ' ' + (owed.length === 1 ? 'is' : 'are') + ' owed minutes from earlier games but not starting.';
+    note.classList.add('warn-text');
+  } else {
+    note.textContent = 'Starters are cleared after each game.';
+    note.classList.remove('warn-text');
+  }
   $('starters').innerHTML = ids.map(id => {
     const isStarter = chosen.includes(id);
     return '<button class="chip ' + (isStarter ? 'on' : '') + (gkId === id ? ' gk' : '') + '" data-starter="' + id + '"' +
@@ -533,54 +638,139 @@ function renderStarters() {
   sel.disabled = eligibleStarters.length === 0;
 }
 
-function renderPlan() {
-  const ids = presentIds();
-  const S = state.subsPerHalf;
-  if (ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
-  const seed = seedMinutes(ids);
-  const plan = planFrom(kickoffPlanInputs());
-  const L = blockLen(S);
+// Shared renderers for a list of plan blocks (setup preview and in-game forecast)
+function blockLabel(b, S) {
+  const inHalf = b.start - (b.half === 2 ? HALF_MIN : 0);
+  return { inHalf, when: b.index === S + 1 ? 'Halftime' : 'H' + b.half + ' ' + fmtClock(inHalf) };
+}
+function planGridHtml(ids, blocks, S, totals, currentIndex) {
   const water = waterBreakInHalf(S);
-
   let html = '<tr><th></th>';
-  plan.blocks.forEach(b => {
-    const inHalf = b.start - (b.half === 2 ? HALF_MIN : 0);
-    html += '<th class="' + (b.index === S + 1 ? 'half-start' : '') + '">' +
+  blocks.forEach(b => {
+    const { inHalf } = blockLabel(b, S);
+    html += '<th class="' + (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now' : '') + '">' +
       (b.index === 0 ? 'H1 ' : b.index === S + 1 ? 'H2 ' : '') + fmtClock(inHalf) +
       (Math.abs(inHalf - water) < 1e-6 ? ' 💧' : '') + '</th>';
   });
   html += '<th>Total</th></tr>';
   ids.forEach(id => {
     html += '<tr><td class="player">' + esc(nameOf(id)) + '</td>';
-    plan.blocks.forEach(b => {
-      const cls = (b.index === S + 1 ? 'half-start ' : '') + (b.gk === id ? 'gk' : b.on.includes(id) ? 'on' : '');
+    blocks.forEach(b => {
+      const cls = (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now ' : '') +
+        (b.gk === id ? 'gk' : b.on.includes(id) ? 'on' : '');
       html += '<td class="' + cls + '">' + (b.gk === id ? 'GK' : b.on.includes(id) ? '●' : '') + '</td>';
     });
-    html += '<td class="total">' + fmtMin(plan.projected[id] - seed[id]) + '</td></tr>';
+    html += '<td class="total">' + fmtMin(totals[id]) + '</td></tr>';
   });
-  $('plan-grid').innerHTML = html;
-
-  const ol = $('plan-swaps');
-  ol.innerHTML = '';
-  for (let i = 1; i < plan.blocks.length; i++) {
-    const prev = plan.blocks[i - 1], b = plan.blocks[i];
-    const d = diffLineups(prev.on, prev.gk, b);
-    const inHalf = b.start - (b.half === 2 ? HALF_MIN : 0);
-    const when = b.index === S + 1 ? 'Halftime' : 'H' + b.half + ' ' + fmtClock(inHalf);
-    const parts = [];
-    if (d.off.length) parts.push('<span class="off">OFF</span> ' + d.off.map(nameOf).map(esc).join(', '));
-    if (d.on.length) parts.push('<b>ON</b> ' + d.on.map(nameOf).map(esc).join(', '));
-    if (d.gk) parts.push('GK → ' + esc(nameOf(d.gk)));
-    const li = document.createElement('li');
-    li.innerHTML = '<b>' + when + '</b>' + (Math.abs(inHalf - water) < 1e-6 ? ' 💧' : '') + ' — ' + (parts.join(' · ') || 'no change');
-    ol.appendChild(li);
+  return html;
+}
+function swapLineHtml(d) {
+  const parts = [];
+  if (d.off.length) parts.push('<span class="off">Off</span> ' + d.off.map(nameOf).map(esc).join(', '));
+  if (d.on.length) parts.push('<span class="on">On</span> ' + d.on.map(nameOf).map(esc).join(', '));
+  if (d.gk) parts.push('GK → ' + esc(nameOf(d.gk)));
+  return parts.join('  ') || 'no change';
+}
+// The red/green sub board panels for a swap, plus a footer line for keeper / warnings
+function boardPanelsHtml(d, extra) {
+  const list = ids => ids.length ? ids.map(id => '<li>' + esc(nameOf(id)) + '</li>').join('') : '<li class="none">nobody</li>';
+  let foot = '';
+  if (d.gk) foot += '<span class="gkline"><b>GK</b>' + esc(nameOf(d.gk)) + '</span>';
+  if (extra) foot += extra;
+  return '<div class="board-panels">' +
+    '<div class="board-panel off"><h4>OFF</h4><ul>' + list(d.off) + '</ul></div>' +
+    '<div class="board-panel on"><h4>ON</h4><ul>' + list(d.on) + '</ul></div></div>' +
+    (foot ? '<div class="board-foot">' + foot + '</div>' : '');
+}
+function planSwapsHtml(blocks, S) {
+  const water = waterBreakInHalf(S);
+  let html = '<li><b>Keepers:</b> ' + [...new Set(blocks.map(b => b.gk))].map(nameOf).map(esc).join(' → ') + '</li>';
+  for (let i = 1; i < blocks.length; i++) {
+    const prev = blocks[i - 1], b = blocks[i];
+    const { inHalf, when } = blockLabel(b, S);
+    html += '<li><b>' + when + '</b>' + (Math.abs(inHalf - water) < 1e-6 ? ' 💧' : '') + ' — ' +
+      swapLineHtml(diffLineups(prev.on, prev.gk, b)) + '</li>';
   }
-  const gkNames = [...new Set(plan.blocks.map(b => b.gk))].map(nameOf).map(esc).join(' → ');
-  $('plan-summary').textContent = blockCount(S) + ' blocks of ' + fmtClock(L);
-  const gkLi = document.createElement('li');
-  gkLi.innerHTML = '<b>Keepers:</b> ' + gkNames;
-  ol.prepend(gkLi);
+  return html;
+}
+
+function renderPlan() {
+  const ids = presentIds();
+  const S = state.subsPerHalf;
+  if (ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
+  const seed = seedMinutes(ids);
+  const plan = planFrom(kickoffPlanInputs());
+  const totals = {};
+  ids.forEach(id => { totals[id] = plan.projected[id] - seed[id]; });
+  $('plan-grid').innerHTML = planGridHtml(ids, plan.blocks, S, totals, -1);
+  $('plan-swaps').innerHTML = planSwapsHtml(plan.blocks, S);
+  $('plan-summary').textContent = blockCount(S) + ' shifts of ' + fmtClock(blockLen(S));
   $('plan-card').hidden = false;
+}
+
+// Forecast the rest of the game from the current lineup: minutes are projected to the end
+// of the current block, an unapplied pending sub is assumed to happen, and the planner runs
+// from the next block. Result is stable within a block so callers can cache by `key`.
+function liveForecast() {
+  const g = state.game;
+  if (!g || g.phase === 'done') return null;
+  const S = g.subsPerHalf, B = blockCount(S);
+  const min = elapsedMin();
+  const b = blockAt(S, min);
+  const ids = presentIds().filter(id => g.players[id]);
+  let onField = ids.filter(id => g.players[id].onField);
+  let gk = g.gk;
+  const p = g.pending;
+  if (p && (p.off.length || p.on.length || p.gk)) {
+    onField = onField.filter(id => !p.off.includes(id)).concat(p.on.filter(id => ids.includes(id)));
+    if (p.gk) gk = p.gk;
+  }
+  const ov = g.nextOverride;
+  const key = [b, onField.join(','), gk, ids.join(','), g.h2gk, ov ? ov.block + ':' + ov.off.join(',') + '>' + ov.on.join(',') : ''].join('|');
+  const seed = seedMinutes(ids);
+  const minutes = currentMinutes();
+  const remain = Math.max(0, Math.min(blockStart(S, b + 1), GAME_MIN) - min);
+  onField.forEach(id => { minutes[id] += remain; });
+  const current = { index: b, half: b <= S ? 1 : 2, start: blockStart(S, b), end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)) };
+  let blocks = [current], next = null, projected = minutes;
+  if (b + 1 < B) {
+    const sub = subForBlock(b + 1, ids, onField, gk, minutes);
+    next = { block: sub.block, diff: sub.diff, manual: sub.manual };
+    if (sub.manual) {
+      // Coach's lineup for the next block, then let the planner take over from there
+      const minutes2 = Object.assign({}, minutes);
+      sub.block.on.forEach(id => { minutes2[id] += blockLen(S); });
+      blocks = [current, sub.block];
+      projected = minutes2;
+      if (b + 2 < B) {
+        const rest = planFrom({
+          ids, S, minutes: minutes2, fromBlock: b + 2, onField: sub.block.on, gk: sub.block.gk,
+          h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids).concat(sub.block.on), gkEligible: gkEligibleSet(),
+        });
+        blocks = blocks.concat(rest.blocks);
+        projected = rest.projected;
+      }
+    } else {
+      blocks = [current, ...sub.plan.blocks];
+      projected = sub.plan.projected;
+    }
+  }
+  // Projected final minutes this game, and each player's fair share of them weighted by
+  // how long they are (and will be) available. "Behind" = ends more than a block short
+  // of fair even if the plan is followed — beyond what the rotation can even out.
+  const totals = {}, fair = {}, behind = {};
+  const left = GAME_MIN - min;
+  const avail = {}; let sumAvail = 0, sumTotal = 0;
+  ids.forEach(id => {
+    totals[id] = projected[id] - seed[id];
+    avail[id] = availableMin(id) + left;
+    sumAvail += avail[id]; sumTotal += totals[id];
+  });
+  ids.forEach(id => {
+    fair[id] = sumAvail > 0 ? sumTotal * avail[id] / sumAvail : 0;
+    behind[id] = totals[id] < fair[id] - blockLen(S) + 1e-6;
+  });
+  return { key, blocks, next, totals, fair, behind, ids };
 }
 
 // ---------- Game ----------
@@ -635,49 +825,117 @@ function renderGame() {
   btn.disabled = g.phase === 'done';
   btn.textContent = g.phase === 'halftime' ? 'Start 2nd half' : g.running ? 'Pause' : (min === 0 ? 'Start' : 'Resume');
 
-  // Banner
+  const ids = presentIds().filter(id => g.players[id]);
+
+  // Sub board lit up: it's time to sub
   const banner = $('banner');
   if (g.pending) {
     const p = g.pending;
     $('banner-title').textContent = p.title;
-    const parts = [];
-    if (p.off.length) parts.push('<span class="off">OFF:</span> ' + p.off.map(nameOf).map(esc).join(', '));
-    if (p.on.length) parts.push('<span class="on">ON:</span> ' + p.on.map(nameOf).map(esc).join(', '));
-    if (p.gk) parts.push('<b>GK:</b> ' + esc(nameOf(p.gk)));
-    $('banner-body').innerHTML = p.note ? esc(p.note) : parts.join('<br>');
+    const pb = p.block != null ? p.block : blockAt(S, min);
+    $('banner').querySelector('.board-strip .muted').textContent = pb === S + 1 ? 'before the 2nd half' :
+      'H' + (pb <= S ? 1 : 2) + ' ' + fmtClock(blockStart(S, pb) - (pb > S ? HALF_MIN : 0));
+    const onNow = ids.filter(id => g.players[id].onField).length;
+    const after = onNow - p.off.length + p.on.length;
+    const over = after > Math.min(ON_FIELD, ids.length);
+    let extra = '';
+    if (p.manual) extra += '<span class="muted">Edited by you</span>';
+    if (over) extra += '<span class="warn">That puts ' + after + ' on the field. Dismiss and sub by hand.</span>';
+    $('banner-body').innerHTML = p.note
+      ? '<div class="board-foot">' + esc(p.note) + '</div>'
+      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra);
     $('banner-apply').hidden = !!p.note;
+    $('banner-apply').disabled = over;
     banner.hidden = false;
   } else {
     banner.hidden = true;
   }
 
-  // Player columns
-  const ids = presentIds().filter(id => g.players[id]);
+  // Player columns — roster order (stable) with the keeper first
   const mins = {};
   ids.forEach(id => { mins[id] = playedMin(id); });
-  const field = ids.filter(id => g.players[id].onField).sort((a, c) => mins[c] - mins[a]);
-  const bench = ids.filter(id => !g.players[id].onField).sort((a, c) => mins[a] - mins[c]);
-  const lo = Math.min(...ids.map(id => mins[id])), hi = Math.max(...ids.map(id => mins[id]));
-  const cls = id => (hi - lo < 1 ? '' : mins[id] <= lo + 0.5 ? 'low' : mins[id] >= hi - 0.5 ? 'high' : '');
+  const field = ids.filter(id => g.players[id].onField).sort((a, c) => (c === g.gk) - (a === g.gk));
+  const bench = ids.filter(id => !g.players[id].onField);
 
+  // Next-sub preview and in-game plan (forecast is stable within a block, so cache by key)
+  const fc = liveForecast();
+  const next = fc && fc.next;
+  // Tags on the player cards: the pending sub while one is waiting to be applied, else the next planned one
+  const pendingSub = g.pending && (g.pending.off.length || g.pending.on.length) ? g.pending : null;
+  const nextOff = new Set(pendingSub ? pendingSub.off : next ? next.diff.off : []);
+  const nextOn = new Set(pendingSub ? pendingSub.on : next ? next.diff.on : []);
+  const tagOff = pendingSub ? 'Off now' : 'Off next', tagOn = pendingSub ? 'On now' : 'On next';
+  const previewEl = $('clock-preview');
+  const problem = overrideProblem(fc);
+  const canEdit = !!next && g.phase !== 'done';
+  const whenLabel = next ? (next.block.index === S + 1 ? 'at halftime' : 'at ' + fmtClock(next.block.start - (next.block.half === 2 ? HALF_MIN : 0)) + (next.block.half === 2 ? ' (2nd half)' : '')) : '';
+  previewEl.classList.toggle('editing', !!g.editNext);
+  if (g.editNext && next) {
+    previewEl.innerHTML = '<div class="board-strip"><span>Editing next sub</span>' +
+      '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '');
+    previewEl.hidden = false;
+  } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
+    previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '');
+    previewEl.hidden = false;
+  } else if (canEdit && !g.pending) {
+    previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>';
+    previewEl.hidden = false;
+  } else {
+    previewEl.hidden = true;
+  }
+  clock.classList.toggle('editing', !!g.editNext);
+  if (fc && !$('live-plan-card').hidden && $('live-plan-card').dataset.key !== fc.key) {
+    $('live-plan-card').dataset.key = fc.key;
+    $('live-plan-grid').innerHTML = fc.totals ? planGridHtml(fc.ids, fc.blocks, S, fc.totals, fc.blocks[0].index) : '';
+    $('live-plan-swaps').innerHTML = fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, S) : '<li>No more subs scheduled.</li>';
+  }
+
+  const tag = id => nextOff.has(id) ? '<span class="tag-next off">' + tagOff + '</span>' : nextOn.has(id) ? '<span class="tag-next on">' + tagOn + '</span>' : '';
+  const isBehind = id => !!(fc && fc.behind[id]);
+  const proj = id => fc ? '<small class="pproj">' + (isBehind(id) ? 'Short — on pace for ' : 'On pace for ') + fmtMin(fc.totals[id]) + '</small>' : '';
+  const cls = id => (isBehind(id) ? 'behind ' : '');
+  // GK badge only on players marked as keepers (everyone, if none are marked)
+  const anyKeeper = state.roster.some(p => p.present && p.gk);
+  const keeper = id => !anyKeeper || byId(id).gk;
+  const gkBadge = (id, onField) => !keeper(id) ? '' :
+    onField ? '<button class="gkbtn" data-gk="' + id + '" aria-label="Make keeper">GK</button>' : '<span class="gkbtn static">GK</span>';
+  // In edit mode the card's right side becomes a next-off / next-on toggle
+  const editing = !!g.editNext;
+  // In edit mode the whole card is the toggle: picked cards fill red (off) or green (on)
+  const pickedCls = (id, onField) => (onField ? nextOff.has(id) : nextOn.has(id)) ? (onField ? 'picked-off ' : 'picked-on ') : '';
+  const toggle = (id, onField) => {
+    const picked = onField ? nextOff.has(id) : nextOn.has(id);
+    return '<span class="etoggle">' + (picked ? '✓' : '') + '</span>';
+  };
   $('field-count').textContent = field.length + '/' + ON_FIELD;
   $('bench-count').textContent = String(bench.length);
   $('field-list').innerHTML = field.map(id =>
-    '<li data-id="' + id + '" class="' + (g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected' : '') + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + '</span>' +
-    '<span class="pmin ' + cls(id) + '">' + fmtMin(mins[id]) + '</span>' +
-    '<button class="gkbtn" data-gk="' + id + '">GK</button></li>').join('');
+    '<li data-id="' + id + '" class="' + (g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, true) : '') + cls(id) + '">' +
+    '<span class="pname">' + esc(nameOf(id)) + (editing ? '' : tag(id)) + '</span>' +
+    (editing ? '<small class="pproj">' + (nextOff.has(id) ? 'Off next' : 'Stays on') + '</small>' + toggle(id, true)
+             : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, true)) + '</li>').join('');
   $('bench-list').innerHTML = bench.map(id =>
-    '<li data-id="' + id + '" class="' + (g.selected === id ? 'selected' : '') + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + '</span>' +
-    '<span class="pmin ' + cls(id) + '">' + fmtMin(mins[id]) + '</span></li>').join('') ||
+    '<li data-id="' + id + '" class="' + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, false) : '') + cls(id) + '">' +
+    '<span class="pname">' + esc(nameOf(id)) + (editing ? '' : tag(id)) + '</span>' +
+    (editing ? '<small class="pproj">' + (nextOn.has(id) ? 'On next' : 'Stays off') + '</small>' + toggle(id, false)
+             : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, false)) + '</li>').join('') ||
     '<li class="muted">No subs</li>';
+  $('btn-edit-mode').hidden = !canEdit;
+  $('btn-edit-mode').textContent = editing ? 'Done editing' : 'Edit next sub';
+  $('btn-edit-mode').classList.toggle('primary', editing);
+  $('btn-edit-mode').classList.toggle('secondary', !editing);
+  $('btn-suggest').disabled = bench.length === 0 || editing;
+  $('game-hint').textContent = editing ? 'Tap a player to change who goes off or on at the next sub.'
+    : 'To sub by hand: tap a bench player, then the field player they replace. Tap GK to change keeper.';
   $('btn-suggest').disabled = bench.length === 0;
 }
 
 function onPlayerTap(id) {
   const g = state.game;
   if (!g || g.phase === 'done' || !g.players[id]) return;
+  if (g.editNext) { toggleNextOverride(id); return; }
   if (g.selected === null || g.selected === id) {
     g.selected = g.selected === id ? null : id;
   } else {
@@ -691,6 +949,7 @@ function onPlayerTap(id) {
       if (wasGk) g.gk = inId;
       g.selected = null;
       g.pending = null;
+      logLineup();
     } else {
       g.selected = id;
     }
@@ -699,11 +958,42 @@ function onPlayerTap(id) {
   renderGame();
 }
 
+// Enter edit mode seeded with the planner's suggestion for the next block
+function startEditNext() {
+  const g = state.game;
+  const fc = liveForecast();
+  if (!fc || !fc.next) return;
+  if (!g.nextOverride || g.nextOverride.block !== fc.next.block.index) {
+    g.nextOverride = { block: fc.next.block.index, off: [...fc.next.diff.off], on: [...fc.next.diff.on] };
+  }
+  g.editNext = true; g.selected = null;
+  save(); renderGame();
+}
+function toggleNextOverride(id) {
+  const g = state.game, ov = g.nextOverride;
+  if (!ov) return;
+  const side = g.players[id].onField ? 'off' : 'on';
+  ov[side] = ov[side].includes(id) ? ov[side].filter(x => x !== id) : ov[side].concat(id);
+  save(); renderGame();
+}
+// Field count after the next sub vs. what it should be; null when fine
+function overrideProblem(fc) {
+  const g = state.game;
+  if (!fc || !fc.next || !fc.next.manual) return null;
+  const ids = fc.ids, onNow = ids.filter(id => g.players[id].onField).length;
+  const after = onNow - fc.next.diff.off.length + fc.next.diff.on.length;
+  const want = Math.min(ON_FIELD, ids.length);
+  if (after === want) return null;
+  const d = after - want;
+  return d > 0 ? 'That puts ' + after + ' on the field — mark ' + d + ' more off' : 'Only ' + after + ' on the field — mark ' + (-d) + ' more on';
+}
+
 function setGk(id) {
   const g = state.game;
   if (!g || !g.players[id] || !g.players[id].onField) return;
   g.gk = id;
   if (g.phase === 'h1') g.h1gk = id;
+  logLineup();
   save();
   renderGame();
 }
@@ -738,6 +1028,7 @@ function toggleMidGame(id) {
     if (g.selected === id) g.selected = null;
   }
   g.pending = null;
+  logLineup();
   save();
   renderModal();
   renderGame();
@@ -755,10 +1046,10 @@ function showSummary() {
   const full = ids.filter(id => !partTime.includes(id));
   const fullVals = full.map(id => minutes[id]);
   const spread = fullVals.length ? Math.max(...fullVals) - Math.min(...fullVals) : 0;
-  $('summary-stats').textContent = ids.length + ' players · fair share ' +
+  $('summary-stats').textContent = ids.length + ' players. Fair share ' +
     (full.length ? fmtMin(shares[full[0]]) : '—') +
     (partTime.length ? ' (' + partTime.length + ' part-time, pro-rated)' : '') +
-    ' · spread ' + fmtClock(spread) + ' · total ' + Math.round(total) + ' player-min';
+    '. Gap between most and least: ' + fmtClock(spread) + '.';
   $('summary-table').innerHTML = '<tr><th>Player</th><th>vs. fair</th><th>Minutes</th></tr>' + ids.map(id => {
     const d = minutes[id] - shares[id];
     const note = (id === g.h1gk || id === g.h2gk || id === g.gk ? ' (GK)' : '') +
@@ -771,12 +1062,82 @@ function showSummary() {
 }
 
 // ---------- Season ----------
+const signed = d => (d >= 0 ? '+' : '−') + fmtClock(Math.abs(d));
+const signCls = d => (d < -0.5 ? 'neg' : d > 0.5 ? 'pos' : '');
+
 function renderSeason() {
+  const games = state.history;
+  const played = {}, totalMin = {};
+  games.forEach(h => Object.keys(h.minutes).forEach(id => { played[id] = (played[id] || 0) + 1; totalMin[id] = (totalMin[id] || 0) + h.minutes[id]; }));
   const rows = state.roster.map(p => ({ p, d: state.carryOver[p.id] || 0 })).sort((a, c) => a.d - c.d);
-  $('season-table').innerHTML = '<tr><th>Player</th><th>vs. fair share</th></tr>' + rows.map(({ p, d }) =>
-    '<tr><td>' + esc(p.name) + '</td><td class="' + (d < -0.5 ? 'neg' : d > 0.5 ? 'pos' : '') + '">' +
-    (d >= 0 ? '+' : '−') + fmtClock(Math.abs(d)) + '</td></tr>').join('');
-  $('season-games').textContent = state.history.length + ' game' + (state.history.length === 1 ? '' : 's') + ' saved';
+  $('season-table').innerHTML = '<tr><th>Player</th><th>Games</th><th>Avg min</th><th>vs. fair</th></tr>' + rows.map(({ p, d }) =>
+    '<tr><td>' + esc(p.name) + '</td><td>' + (played[p.id] || 0) + '</td>' +
+    '<td>' + (played[p.id] ? fmtMin(totalMin[p.id] / played[p.id]) : '—') + '</td>' +
+    '<td class="' + signCls(d) + '">' + signed(d) + '</td></tr>').join('');
+  $('season-games').textContent = games.length + ' game' + (games.length === 1 ? '' : 's') + ' saved';
+  $('game-list').innerHTML = games.length ? [...games].reverse().map((h, i) => {
+    const vals = Object.values(h.minutes);
+    const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+    const n = games.length - i;
+    return '<li data-game="' + esc(h.id || String(games.length - 1 - i)) + '"><span class="name">Game ' + n + ' · ' + esc(h.date) + '</span>' +
+      '<span class="muted">' + Object.keys(h.minutes).length + ' players, ' + (h.subsPerHalf || '?') + ' subs per half, gap ' + fmtClock(spread) + '</span><span class="chev">›</span></li>';
+  }).join('') : '<li class="muted">No games saved yet.</li>';
+}
+
+function gameByKey(key) {
+  return state.history.find((h, i) => (h.id || String(i)) === key);
+}
+
+function renderGameDetail(key) {
+  const h = gameByKey(key);
+  if (!h) return;
+  const S = h.subsPerHalf || 3;
+  const ids = (h.players || Object.keys(h.minutes)).slice();
+  const name = id => (h.names && h.names[id]) || nameOf(id);
+  const idx = state.history.indexOf(h);
+  $('gd-title').textContent = 'Game ' + (idx + 1) + ' · ' + h.date;
+  const vals = ids.map(id => h.minutes[id]);
+  const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+  const keepers = [...new Set((h.log || []).map(e => e.gk).filter(Boolean))].map(name);
+  $('gd-meta').textContent = ids.length + ' players, ' + S + ' subs per half (shifts of ' + fmtClock(blockLen(S)) + '). Gap between most and least: ' + fmtClock(spread) + '.' +
+    (keepers.length ? ' Keepers: ' + keepers.join(' → ') + '.' : '');
+
+  // Actual lineups per block, from the log (lineup in effect at the block's midpoint)
+  const log = h.log || [];
+  const B = blockCount(S), L = blockLen(S);
+  const blocks = [];
+  for (let b = 0; b < B; b++) {
+    const mid = (b + 0.5) * L;
+    const entry = [...log].reverse().find(e => e.t <= mid + 1e-6) || log[0];
+    if (!entry) break;
+    blocks.push({ index: b, half: b <= S ? 1 : 2, start: b * L, end: (b + 1) * L, on: entry.on, gk: entry.gk, bench: ids.filter(id => !entry.on.includes(id)) });
+  }
+  window.__nameOverride = name;
+  $('gd-actual-grid').innerHTML = blocks.length ? planGridHtml(ids, blocks, S, h.minutes, -1) : '<tr><td class="muted">No lineup log for this game.</td></tr>';
+  // Sub log: every lineup change with time
+  $('gd-log').innerHTML = log.map((e, i) => {
+    if (i === 0) return '<li><b>Kickoff</b> — ' + e.on.map(name).map(esc).join(', ') + (e.gk ? ' · GK ' + esc(name(e.gk)) : '') + '</li>';
+    const prev = log[i - 1];
+    const d = { off: prev.on.filter(id => !e.on.includes(id)), on: e.on.filter(id => !prev.on.includes(id)), gk: e.gk !== prev.gk ? e.gk : null };
+    const when = e.t >= HALF_MIN ? 'H2 ' + fmtClock(e.t - HALF_MIN) : 'H1 ' + fmtClock(e.t);
+    return '<li><b>' + (Math.abs(e.t - HALF_MIN) < 1e-6 ? 'Halftime' : when) + '</b> — ' + swapLineHtml(d) + '</li>';
+  }).join('') || '<li class="muted">No subs recorded.</li>';
+  // Planned grid (what the app suggested before kickoff)
+  const plan = (h.plan || []).map(b => ({ index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on: b.on, gk: b.gk, bench: [] }));
+  const planTotals = {};
+  ids.forEach(id => { planTotals[id] = plan.filter(b => b.on.includes(id)).length * L; });
+  $('gd-plan-grid').innerHTML = plan.length ? planGridHtml(ids, plan, S, planTotals, -1) : '<tr><td class="muted">No plan saved for this game.</td></tr>';
+  window.__nameOverride = null;
+  // Playtime table
+  const sorted = ids.slice().sort((a, c) => h.minutes[c] - h.minutes[a]);
+  const partTime = id => h.avail && Math.abs(h.avail[id] - GAME_MIN) > 0.5;
+  $('gd-table').innerHTML = '<tr><th>Player</th><th>vs. fair</th><th>Minutes</th></tr>' + sorted.map(id => {
+    const d = h.minutes[id] - (h.shares[id] || 0);
+    return '<tr><td>' + esc(name(id)) + (partTime(id) ? ' <span class="muted">(' + fmtMin(h.avail[id]) + ' avail.)</span>' : '') + '</td>' +
+      '<td class="' + signCls(d) + '">' + signed(d) + '</td><td>' + fmtMin(h.minutes[id]) + '</td></tr>';
+  }).join('');
+  $('view-gamedetail').dataset.key = key;
+  show('gamedetail');
 }
 
 // ============================================================
@@ -810,6 +1171,16 @@ $('starters').addEventListener('click', e => {
 });
 $('start-gk').addEventListener('change', e => { state.startGk = e.target.value || null; save(); renderSetup(); });
 $('btn-starters-clear').addEventListener('click', () => { state.starters = []; state.startGk = null; save(); renderSetup(); });
+// Fill the starters with the players who have had the least time this season (the planner's
+// own kickoff pick), including its choice of keeper so at least one goalie starts.
+$('btn-starters-suggest').addEventListener('click', () => {
+  const plan = planFrom(Object.assign(kickoffPlanInputs(), { starters: [], h1gk: null }));
+  const first = plan.blocks[0];
+  if (!first) return;
+  state.starters = first.on.slice();
+  state.startGk = (byId(first.gk) && byId(first.gk).gk) ? first.gk : null;
+  save(); renderSetup();
+});
 $('subs-minus').addEventListener('click', () => { state.subsPerHalf = Math.max(MIN_SUBS, state.subsPerHalf - 1); save(); renderSetup(); });
 $('subs-plus').addEventListener('click', () => { state.subsPerHalf = Math.min(MAX_SUBS, state.subsPerHalf + 1); save(); renderSetup(); });
 $('use-carry').addEventListener('change', e => { state.useCarryOver = e.target.checked; save(); renderSetup(); });
@@ -825,6 +1196,18 @@ $('btn-start').addEventListener('click', () => {
 });
 $('btn-season').addEventListener('click', () => { renderSeason(); show('season'); });
 $('btn-season-back').addEventListener('click', () => { renderSetup(); show('setup'); });
+$('game-list').addEventListener('click', e => {
+  const li = e.target.closest('[data-game]');
+  if (li) renderGameDetail(li.dataset.game);
+});
+$('btn-gd-back').addEventListener('click', () => { renderSeason(); show('season'); });
+$('btn-gd-delete').addEventListener('click', () => {
+  const h = gameByKey($('view-gamedetail').dataset.key);
+  if (h && confirm('Delete this game from the season? Carry-over will be recalculated.')) {
+    state.history = state.history.filter(x => x !== h);
+    recomputeCarryOver(); save(); renderSeason(); show('season');
+  }
+});
 $('btn-season-reset').addEventListener('click', () => {
   if (confirm('Clear all saved games and carry-over?')) { state.carryOver = {}; state.history = []; save(); renderSeason(); }
 });
@@ -844,6 +1227,22 @@ $('modal-list').addEventListener('click', e => {
 });
 $('banner-apply').addEventListener('click', () => { applyPending(); renderGame(); });
 $('banner-dismiss').addEventListener('click', () => { state.game.pending = null; save(); renderGame(); });
+$('clock-preview').addEventListener('click', e => {
+  const g = state.game;
+  if (e.target.id === 'btn-edit-done') { g.editNext = false; save(); renderGame(); }
+  else if (e.target.id === 'btn-edit-reset') { g.nextOverride = null; save(); startEditNext(); }
+});
+$('btn-edit-mode').addEventListener('click', () => {
+  const g = state.game;
+  if (g.editNext) { g.editNext = false; save(); renderGame(); } else startEditNext();
+});
+$('btn-live-plan').addEventListener('click', () => {
+  const card = $('live-plan-card');
+  card.hidden = !card.hidden;
+  card.dataset.key = '';
+  $('btn-live-plan').textContent = card.hidden ? 'Show plan' : 'Hide plan';
+  renderGame();
+});
 $('btn-suggest').addEventListener('click', () => { state.game.pending = adHocSuggestion(); save(); renderGame(); });
 ['field-list', 'bench-list'].forEach(id => $(id).addEventListener('click', e => {
   const gk = e.target.closest('[data-gk]');
@@ -854,7 +1253,7 @@ $('btn-suggest').addEventListener('click', () => { state.game.pending = adHocSug
 
 $('btn-save').addEventListener('click', () => { saveToSeason(); renderSetup(); show('setup'); });
 $('btn-discard').addEventListener('click', () => {
-  if (confirm('Discard this game without saving?')) { state.game = null; save(); renderSetup(); show('setup'); }
+  if (confirm('Discard this game without saving?')) { state.game = null; state.starters = []; state.startGk = null; save(); renderSetup(); show('setup'); }
 });
 
 // ============================================================
@@ -877,5 +1276,21 @@ if (state.game && state.game.phase === 'done') {
 }
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
+  if (location.search.includes('reset')) {
+    // ?reset — wipe the offline cache and reload fresh (handy after an update)
+    navigator.serviceWorker.getRegistrations()
+      .then(rs => Promise.all(rs.map(r => r.unregister())))
+      .then(() => caches.keys()).then(ks => Promise.all(ks.map(k => caches.delete(k))))
+      .finally(() => { location.replace(location.pathname); });
+  } else {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(() => {}); });
+    // When an *updated* service worker takes over (not the first install), reload once so
+    // the new version shows immediately instead of on the following visit
+    const hadController = !!navigator.serviceWorker.controller;
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController || reloaded) return;
+      reloaded = true; location.reload();
+    });
+  }
 }

@@ -1,5 +1,5 @@
 // Bump the version whenever any cached file changes so installed phones pick up the update.
-const CACHE = 'gametime-v1';
+const CACHE = 'gametime-v18';
 const FILES = [
   './',
   './index.html',
@@ -28,7 +28,7 @@ self.addEventListener('fetch', e => {
   e.respondWith(
     caches.match(e.request).then(cached => {
       const network = fetch(e.request).then(res => {
-        if (res && res.ok) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+        if (res && (res.ok || res.type === 'opaque')) caches.open(CACHE).then(c => c.put(e.request, res.clone()));
         return res;
       }).catch(() => cached);
       return cached || network;
