@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <title>Game Time</title>
+  <meta name="theme-color" content="#1b5e20">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Game Time">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<section id="view-setup" class="view">
+  <header class="bar">
+    <h1>Game Time</h1>
+    <button class="link" id="btn-season">Season</button>
+  </header>
+
+  <div class="card">
+    <div class="card-title">
+      <h2>Roster</h2>
+      <span id="attendance-summary" class="muted"></span>
+    </div>
+    <p class="hint">Tap a name to mark present / absent. Tap ✎ to rename. GK = willing to play keeper.</p>
+    <ul id="roster" class="roster"></ul>
+  </div>
+
+  <div class="card" id="starters-card" hidden>
+    <div class="card-title">
+      <h2>Starters</h2>
+      <span id="starters-summary" class="muted"></span>
+    </div>
+    <p class="hint">Optional — tap up to 7 players to start on the field. Anyone you don't pick is filled in by the plan.</p>
+    <div id="starters" class="chips"></div>
+    <div class="row">
+      <label for="start-gk" class="label">Starting keeper</label>
+      <select id="start-gk"></select>
+      <button class="link small-link" id="btn-starters-clear">Clear</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Subs per half</h2>
+    <div class="stepper">
+      <button id="subs-minus" aria-label="Fewer subs">−</button>
+      <span id="subs-value">3</span>
+      <button id="subs-plus" aria-label="More subs">+</button>
+    </div>
+    <p id="subs-schedule" class="hint"></p>
+    <p id="subs-fairness" class="hint"></p>
+    <label class="check"><input type="checkbox" id="use-carry"> Balance against previous games (season carry-over)</label>
+  </div>
+
+  <div class="card" id="plan-card" hidden>
+    <div class="card-title">
+      <h2>Rotation plan</h2>
+      <span id="plan-summary" class="muted"></span>
+    </div>
+    <div class="scroll-x"><table id="plan-grid" class="plan"></table></div>
+    <ol id="plan-swaps" class="swaps"></ol>
+  </div>
+
+  <div class="actions">
+    <button class="secondary" id="btn-plan">Show plan</button>
+    <button class="primary" id="btn-start">Start game</button>
+  </div>
+  <p id="start-msg" class="hint center"></p>
+</section>
+
+<!-- ============ GAME ============ -->
+<section id="view-game" class="view" hidden>
+  <header class="clock">
+    <div class="clock-row">
+      <span id="clock-half" class="pill">1st half</span>
+      <span id="clock-time">00:00</span>
+      <span id="clock-block" class="pill"></span>
+    </div>
+    <div id="clock-next" class="next"></div>
+    <div class="timeline"><div id="timeline-fill"></div><div id="timeline-marks"></div></div>
+    <div class="clock-actions">
+      <button id="btn-clock" class="primary">Start</button>
+      <button id="btn-attendance" class="secondary">Attendance</button>
+      <button id="btn-end" class="link danger">End game</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden>
+    <div id="banner-title" class="banner-title"></div>
+    <div id="banner-body" class="banner-body"></div>
+    <div class="banner-actions">
+      <button id="banner-apply" class="primary">Apply</button>
+      <button id="banner-dismiss" class="link">Dismiss</button>
+    </div>
+  </div>
+
+  <div class="columns">
+    <div class="col">
+      <h3>On field <span id="field-count" class="muted"></span></h3>
+      <ul id="field-list" class="players"></ul>
+    </div>
+    <div class="col">
+      <h3>Bench <span id="bench-count" class="muted"></span></h3>
+      <ul id="bench-list" class="players"></ul>
+      <button id="btn-suggest" class="secondary small">Suggest a sub</button>
+    </div>
+  </div>
+  <p class="hint center">Tap a bench player, then a field player to swap. Tap GK on a field player to make them keeper.</p>
+</section>
+
+<!-- ============ SUMMARY ============ -->
+<section id="view-summary" class="view" hidden>
+  <header class="bar"><h1>Game summary</h1></header>
+  <div class="card">
+    <p id="summary-stats" class="muted"></p>
+    <table id="summary-table" class="summary"></table>
+  </div>
+  <div class="actions">
+    <button class="primary" id="btn-save">Save to season</button>
+    <button class="link danger" id="btn-discard">Discard</button>
+  </div>
+</section>
+
+<!-- ============ SEASON ============ -->
+<section id="view-season" class="view" hidden>
+  <header class="bar">
+    <button class="link" id="btn-season-back">‹ Back</button>
+    <h1>Season</h1>
+  </header>
+  <div class="card">
+    <p class="hint">Minutes above (+) or below (−) the fair share, summed over saved games. Players below zero get priority next game.</p>
+    <table id="season-table" class="summary"></table>
+    <p id="season-games" class="muted"></p>
+  </div>
+  <div class="actions">
+    <button class="link danger" id="btn-season-reset">Reset season</button>
+  </div>
+</section>
+
+<!-- ============ ATTENDANCE (mid-game) ============ -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-box">
+    <h2>Attendance</h2>
+    <p class="hint">Mark late arrivals as in, injured players as out.</p>
+    <ul id="modal-list" class="roster"></ul>
+    <button id="modal-close" class="primary">Done</button>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>
