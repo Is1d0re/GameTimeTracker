@@ -181,6 +181,8 @@ table.plan th.now { color: var(--pitch-deep); }
 .board.now .board-strip .muted { color: rgba(0,0,0,.6); }
 .board-actions { display: flex; gap: 8px; padding: 10px 12px; background: var(--paper); border-top: 1px solid var(--line); }
 .board-actions .primary { flex: 1; font-family: var(--display); font-size: 20px; font-weight: 800; }
+.board-actions .muted { flex: 1 1 120px; font-size: 14px; }
+.board.editing .board-actions { background: var(--paper); }
 .board.quiet { border-color: var(--line); background: var(--paper); }
 .board.quiet .board-strip { color: var(--ink); }
 .board.quiet .board-strip .muted { color: var(--ink-soft); }

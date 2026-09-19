@@ -871,9 +871,12 @@ function renderGame() {
   const whenLabel = next ? (next.block.index === S + 1 ? 'at halftime' : 'at ' + fmtClock(next.block.start - (next.block.half === 2 ? HALF_MIN : 0)) + (next.block.half === 2 ? ' (2nd half)' : '')) : '';
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
+    const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
     previewEl.innerHTML = '<div class="board-strip"><span>Editing next sub</span>' +
       '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '');
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '') +
+      '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
+      '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>';
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
     previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
@@ -927,33 +930,31 @@ function renderGame() {
   $('btn-edit-mode').classList.toggle('primary', editing);
   $('btn-edit-mode').classList.toggle('secondary', !editing);
   $('btn-suggest').disabled = bench.length === 0 || editing;
-  $('game-hint').textContent = editing ? 'Tap a player to change who goes off or on at the next sub.'
-    : 'To sub by hand: tap a bench player, then the field player they replace. Tap GK to change keeper.';
+  $('game-hint').textContent = editing ? 'Tap players to change who goes off or on. Sub now, or Done to wait for the whistle.'
+    : 'Tap Edit next sub to change the lineup or make an unplanned sub. Tap GK to change keeper.';
   $('btn-suggest').disabled = bench.length === 0;
 }
 
+// Players can only be moved in edit mode; a stray tap on the sideline must not change the lineup
 function onPlayerTap(id) {
   const g = state.game;
-  if (!g || g.phase === 'done' || !g.players[id]) return;
-  if (g.editNext) { toggleNextOverride(id); return; }
-  if (g.selected === null || g.selected === id) {
-    g.selected = g.selected === id ? null : id;
-  } else {
-    const a = g.players[g.selected], bP = g.players[id];
-    if (a.onField !== bP.onField) {
-      const outId = a.onField ? g.selected : id;
-      const inId = a.onField ? id : g.selected;
-      const wasGk = g.gk === outId;
-      setOnField(outId, false);
-      setOnField(inId, true);
-      if (wasGk) g.gk = inId;
-      g.selected = null;
-      g.pending = null;
-      logLineup();
-    } else {
-      g.selected = id;
-    }
-  }
+  if (!g || g.phase === 'done' || !g.players[id] || !g.editNext) return;
+  toggleNextOverride(id);
+}
+
+// Apply the edited off/on right now instead of waiting for the next scheduled sub
+function subNow() {
+  const g = state.game;
+  const fc = liveForecast();
+  if (!fc || !fc.next || !fc.next.manual || overrideProblem(fc)) return;
+  const d = fc.next.diff;
+  const off = d.off.filter(id => g.players[id] && g.players[id].onField);
+  const on = d.on.filter(id => g.players[id] && !g.players[id].onField);
+  if (!off.length && !on.length && !d.gk) return;
+  g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: blockAt(g.subsPerHalf, elapsedMin()) };
+  applyPending();
+  g.nextOverride = null;
+  g.editNext = false;
   save();
   renderGame();
 }
@@ -1231,6 +1232,7 @@ $('clock-preview').addEventListener('click', e => {
   const g = state.game;
   if (e.target.id === 'btn-edit-done') { g.editNext = false; save(); renderGame(); }
   else if (e.target.id === 'btn-edit-reset') { g.nextOverride = null; save(); startEditNext(); }
+  else if (e.target.id === 'btn-sub-now') subNow();
 });
 $('btn-edit-mode').addEventListener('click', () => {
   const g = state.game;
