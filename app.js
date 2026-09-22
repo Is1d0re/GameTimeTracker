@@ -732,6 +732,30 @@ document.addEventListener('visibilitychange', () => {
 // UI: views
 // ============================================================
 const $ = id => document.getElementById(id);
+// Replace innerHTML only when it differs — rebuilding identical markup every tick
+// interrupts momentum scrolling on a phone.
+function setHtml(el, html) {
+  if (el.__html === html) return;
+  el.__html = html; el.innerHTML = html;
+}
+// Player lists tick every second. Rebuild the rows only when something structural changes;
+// otherwise just update the two bits of text that moved.
+function paintList(el, rows, empty) {
+  const sig = rows.map(r => r.key).join('|');
+  if (el.dataset.sig === sig) {
+    rows.forEach(r => {
+      const li = el.querySelector('li[data-id="' + r.id + '"]');
+      if (!li) return;
+      const m = li.querySelector('.pmin');
+      if (m && m.textContent !== r.min) m.textContent = r.min;
+      const pr = li.querySelector('.pproj');
+      if (pr && pr.textContent !== r.proj) pr.textContent = r.proj;
+    });
+    return;
+  }
+  el.dataset.sig = sig;
+  el.innerHTML = rows.map(r => r.html).join('') || empty;
+}
 const views = ['setup', 'game', 'summary', 'season', 'gamedetail'];
 function show(view) {
   views.forEach(v => { $('view-' + v).hidden = v !== view; });
@@ -1039,15 +1063,18 @@ function renderGame() {
     const pb = p.block != null ? p.block : blockAt(S, min);
     $('banner').querySelector('.board-strip .muted').textContent = pb === S + 1 ? 'before the 2nd half' :
       'H' + (pb <= S ? 1 : 2) + ' ' + fmtClock(blockStart(S, pb) - (pb > S ? HALF_MIN : 0));
+    // An edited sub can leave the wrong number on the field; never let Apply commit that
     const onNow = ids.filter(id => g.players[id].onField).length;
     const after = onNow - p.off.length + p.on.length;
-    const over = after > Math.min(ON_FIELD, ids.length);
+    const want = Math.min(ON_FIELD, ids.length);
+    const over = after !== want;
     let extra = '';
     if (p.manual) extra += '<span class="muted">Edited by you</span>';
-    if (over) extra += '<span class="warn">That puts ' + after + ' on the field. Dismiss and sub by hand.</span>';
-    $('banner-body').innerHTML = p.note
+    if (over) extra += '<span class="warn">That leaves ' + after + ' on the field, not ' + want +
+      '. Tap Edit next sub to fix it.</span>';
+    setHtml($('banner-body'), p.note
       ? '<div class="board-foot">' + esc(p.note) + '</div>'
-      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots);
+      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots));
     $('banner-apply').hidden = !!p.note;
     $('banner-apply').disabled = over;
     banner.hidden = false;
@@ -1076,18 +1103,18 @@ function renderGame() {
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
-    previewEl.innerHTML = '<div class="board-strip"><span>Editing next sub</span>' +
+    setHtml(previewEl, '<div class="board-strip"><span>Editing next sub</span>' +
       '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
-      '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>';
+      '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>');
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
-    previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots);
+    setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots));
     previewEl.hidden = false;
   } else if (canEdit && !g.pending) {
-    previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>';
+    setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>');
     previewEl.hidden = false;
   } else {
     previewEl.hidden = true;
@@ -1095,13 +1122,12 @@ function renderGame() {
   clock.classList.toggle('editing', !!g.editNext);
   if (fc && !$('live-plan-card').hidden && $('live-plan-card').dataset.key !== fc.key) {
     $('live-plan-card').dataset.key = fc.key;
-    $('live-plan-grid').innerHTML = fc.totals ? planGridHtml(fc.ids, fc.blocks, S, fc.totals, fc.blocks[0].index) : '';
-    $('live-plan-swaps').innerHTML = fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, S) : '<li>No more subs scheduled.</li>';
+    setHtml($('live-plan-grid'), fc.totals ? planGridHtml(fc.ids, fc.blocks, S, fc.totals, fc.blocks[0].index) : '');
+    setHtml($('live-plan-swaps'), fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, S) : '<li>No more subs scheduled.</li>');
   }
 
   const tag = id => nextOff.has(id) ? '<span class="tag-next off">' + tagOff + '</span>' : nextOn.has(id) ? '<span class="tag-next on">' + tagOn + '</span>' : '';
   const isBehind = id => !!(fc && fc.behind[id]);
-  const proj = id => fc ? '<small class="pproj">' + (isBehind(id) ? 'Short — on pace for ' : 'On pace for ') + fmtMin(fc.totals[id]) + '</small>' : '';
   const cls = id => (isBehind(id) ? 'behind ' : '');
   // GK badge only on players marked as keepers (everyone, if none are marked)
   const anyKeeper = state.roster.some(p => p.present && p.gk);
@@ -1125,17 +1151,24 @@ function renderGame() {
   };
   $('field-count').textContent = field.length + '/' + ON_FIELD;
   $('bench-count').textContent = String(bench.length);
-  $('field-list').innerHTML = field.map(id =>
-    '<li data-id="' + id + '" class="' + (g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, true) : '') + cls(id) + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>' +
-    (editing ? '<small class="pproj">' + (nextOff.has(id) ? 'Off next' : 'Stays on') + '</small>' + toggle(id, true)
-             : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, true)) + '</li>').join('');
-  $('bench-list').innerHTML = bench.map(id =>
-    '<li data-id="' + id + '" class="' + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, false) : '') + cls(id) + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>' +
-    (editing ? '<small class="pproj">' + (nextOn.has(id) ? 'On next' : 'Stays off') + '</small>' + toggle(id, false)
-             : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, false)) + '</li>').join('') ||
-    '<li class="muted">No subs</li>';
+  const projText = id => fc ? (isBehind(id) ? 'Short — on pace for ' : 'On pace for ') + fmtMin(fc.totals[id]) : '';
+  const row = (id, onField) => {
+    const liCls = (onField && g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') +
+      (editing ? 'editing ' + pickedCls(id, onField) : '') + cls(id);
+    const head = '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>';
+    const editNote = onField ? (nextOff.has(id) ? 'Off next' : 'Stays on') : (nextOn.has(id) ? 'On next' : 'Stays off');
+    const tail = editing
+      ? '<small class="pproj">' + editNote + '</small>' + toggle(id, onField)
+      : '<small class="pproj">' + esc(projText(id)) + '</small>' +
+        '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, onField);
+    return {
+      id, min: fmtMin(mins[id]), proj: editing ? editNote : projText(id),
+      key: id + ':' + liCls + ':' + head + ':' + (editing ? 'e' + toggle(id, onField) : gkBadge(id, onField)),
+      html: '<li data-id="' + id + '" class="' + liCls + '">' + head + tail + '</li>',
+    };
+  };
+  paintList($('field-list'), field.map(id => row(id, true)), '');
+  paintList($('bench-list'), bench.map(id => row(id, false)), '<li class="muted">No subs</li>');
   $('btn-edit-mode').hidden = !canEdit;
   $('btn-edit-mode').textContent = editing ? 'Done editing' : 'Edit next sub';
   $('btn-edit-mode').classList.toggle('primary', editing);

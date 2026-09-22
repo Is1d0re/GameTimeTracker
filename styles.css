@@ -25,7 +25,7 @@
 }
 
 * { box-sizing: border-box; min-width: 0; }
-html, body { margin: 0; padding: 0; max-width: 100%; overflow-x: hidden; }
+html, body { margin: 0; padding: 0; max-width: 100%; }
 body {
   font: 16px/1.4 var(--text);
   color: var(--ink);
@@ -33,7 +33,7 @@ body {
   padding: env(safe-area-inset-top) 12px calc(env(safe-area-inset-bottom) + 32px);
   -webkit-text-size-adjust: 100%;
   -webkit-tap-highlight-color: transparent;
-  overscroll-behavior: none;
+  overscroll-behavior-y: contain;
 }
 h1, h2, h3 { font-family: var(--display); font-weight: 800; letter-spacing: .01em; margin: 0; line-height: 1.05; }
 h1 { font-size: 30px; }
