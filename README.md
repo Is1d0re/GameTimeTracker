@@ -33,7 +33,7 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 4. **Show plan** (optional) — the full rotation grid; screenshot it as a backup.
 5. **Start game**, then tap **Start** when the ref blows the whistle. Pause for injuries etc.
 6. When the phone buzzes, the banner shows who goes OFF/ON. Tap **Apply** once the kids have swapped.
-7. To sub manually: tap a bench player, then the field player they replace. Tap **GK** on a field player to make them keeper.
+7. To change the lineup, tap **Edit next sub**, then tap players to set who goes off and on. **Sub now** applies it immediately (for an unplanned sub); **Done** holds it for the next whistle. Tap **GK** on a field player to change keeper. Outside edit mode, tapping players does nothing, so a stray tap can't disturb the lineup.
 8. **Attendance** lets you add a late arrival or mark a player out (injured).
 9. At full time, review the summary and tap **Save to season** so next game's plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share, so they aren't "owed" minutes they weren't there for.
 
