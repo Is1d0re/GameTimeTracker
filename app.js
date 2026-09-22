@@ -10,17 +10,46 @@ const ROSTER_SIZE = 11;
 const MIN_SUBS = 1, MAX_SUBS = 6;
 const STORAGE_KEY = 'gametime.v1';
 
+// 1-2-3-1: the seven slots on the field, and the position groups players pick from.
+// Wide slots double as back and wing (2/11 left, 2/7 right), so both map to one group.
+const SLOTS = [
+  { id: 'GK', label: 'GK', pos: 'GK' },
+  { id: 'LCB', label: 'LCB', pos: 'CB' },
+  { id: 'RCB', label: 'RCB', pos: 'CB' },
+  { id: 'LW', label: 'LB/LW', pos: 'W' },
+  { id: 'CM', label: 'CM', pos: 'CM' },
+  { id: 'RW', label: 'RB/RW', pos: 'W' },
+  { id: 'ST', label: 'ST', pos: 'ST' },
+];
+const POS = [
+  { id: 'GK', label: 'GK', num: '1', name: 'Goalkeeper' },
+  { id: 'CB', label: 'CB', num: '4/5', name: 'Center back' },
+  { id: 'W', label: 'W', num: '7/11', name: 'Wing (back or winger)' },
+  { id: 'CM', label: 'CM', num: '8', name: 'Center mid' },
+  { id: 'ST', label: 'ST', num: '9', name: 'Striker' },
+];
+const slotById = id => SLOTS.find(s => s.id === id);
+const posLabel = id => (POS.find(p => p.id === id) || { label: id }).label;
+
 // ============================================================
 // State
 // ============================================================
 const DEFAULT_NAMES = ['Alvi', 'Kamryn', 'Ezra', 'Mason', 'Milan', 'Anthony', 'Ronaldo', 'Cameron', 'Daniel', 'Donavan', 'Mateo'];
+// Preferred positions from the coach's team sheet, best first
+const DEFAULT_PREFS = {
+  Alvi: ['ST', 'W'], Kamryn: ['ST', 'CM'], Ezra: ['GK', 'CB', 'ST'], Mason: ['CM', 'CB'],
+  Milan: ['CM', 'W'], Anthony: ['GK'], Ronaldo: ['CB', 'CM'], Cameron: ['GK', 'W', 'ST'],
+  Daniel: ['CM', 'W'], Donavan: ['CM', 'W'], Mateo: ['W', 'ST'],
+};
 
 function defaultState() {
   return {
-    roster: Array.from({ length: ROSTER_SIZE }, (_, i) => ({
-      id: 'p' + i, name: DEFAULT_NAMES[i] || 'Player ' + (i + 1), gk: false, present: true,
-    })),
-    v: 2,
+    roster: Array.from({ length: ROSTER_SIZE }, (_, i) => {
+      const name = DEFAULT_NAMES[i] || 'Player ' + (i + 1);
+      const prefs = DEFAULT_PREFS[name] || [];
+      return { id: 'p' + i, name, prefs, gk: prefs.includes('GK'), present: true };
+    }),
+    v: 3,
     subsPerHalf: 3,
     starters: [],     // ids the coach wants on at kickoff (optional, up to 7)
     startGk: null,    // starting keeper (optional; must be a starter)
@@ -41,6 +70,15 @@ function load() {
       const st = Object.assign(defaultState(), saved);
       // v2: keeper flag defaults to off; clear the old all-on default
       if (!saved.v) { st.roster.forEach(p => { p.gk = false; }); st.v = 2; }
+      // v3: preferred positions. Seed from the team sheet where the name matches.
+      if (st.v < 3) {
+        st.roster.forEach(p => {
+          if (!p.prefs) p.prefs = (DEFAULT_PREFS[p.name] || []).slice();
+          if (p.gk && !p.prefs.includes('GK')) p.prefs.unshift('GK');
+        });
+        st.v = 3;
+      }
+      st.roster.forEach(p => { p.prefs = p.prefs || []; p.gk = p.prefs.includes('GK'); });
       return st;
     }
   } catch (e) { /* ignore */ }
@@ -82,6 +120,65 @@ function fmtClock(min) {
 function fmtMin(min) { return fmtClock(min); }
 
 // ============================================================
+// Slot assignment
+// Gives each player on the field one of the seven slots. A position the player is marked
+// for always beats one they are not; among those, time already spent in each position
+// spreads them around, and keeping last block's slot breaks the remaining ties.
+// Exact via DP over the 2^7 sets of filled slots.
+// ============================================================
+const OFF_PREF = 60;       // a position the player is not marked for
+const NO_PREF = 30;        // player has no positions marked, so every slot is equal
+const POS_TIME_W = 0.25;   // per minute already played in that position, to spread them around
+const STAY_BONUS = 2;      // keeping the same slot as last block
+
+function assignSlots({ on, gk, prefsOf, posMins, prev }) {
+  const n = on.length, nS = SLOTS.length;
+  if (!n) return {};
+  const pref = id => (prefsOf ? prefsOf(id) : null) || [];
+  const cost = on.map(id => SLOTS.map(sl => {
+    if (gk) {
+      if (sl.id === 'GK') return id === gk ? -1000 : 1000;
+      if (id === gk) return 1000;
+    }
+    const prefs = pref(id);
+    let c = prefs.includes(sl.pos) ? 0 : (prefs.length ? OFF_PREF : NO_PREF);
+    c += POS_TIME_W * (((posMins || {})[id] || {})[sl.pos] || 0);
+    if (prev && prev[sl.id] === id) c -= STAY_BONUS;
+    return c;
+  }));
+  const FULL = 1 << nS;
+  const bits = m => { let k = 0; while (m) { k += m & 1; m >>= 1; } return k; };
+  const dp = new Float64Array(FULL).fill(Infinity);
+  const from = new Int8Array(FULL).fill(-1);
+  dp[0] = 0;
+  for (let mask = 0; mask < FULL; mask++) {
+    if (dp[mask] === Infinity) continue;
+    const k = bits(mask);
+    if (k >= n) continue;
+    for (let i = 0; i < nS; i++) {
+      if (mask & (1 << i)) continue;
+      const next = mask | (1 << i), c = dp[mask] + cost[k][i];
+      if (c < dp[next]) { dp[next] = c; from[next] = i; }
+    }
+  }
+  let best = -1, bestCost = Infinity;
+  for (let mask = 0; mask < FULL; mask++) {
+    if (bits(mask) === n && dp[mask] < bestCost) { bestCost = dp[mask]; best = mask; }
+  }
+  const out = {};
+  let mask = best;
+  for (let k = n - 1; k >= 0 && mask > 0; k--) {
+    const i = from[mask];
+    if (i < 0) break;
+    out[SLOTS[i].id] = on[k];
+    mask &= ~(1 << i);
+  }
+  return out;
+}
+// Where a player is, given a slot map
+const slotOfPlayer = (slots, id) => Object.keys(slots || {}).find(k => slots[k] === id) || null;
+
+// ============================================================
 // Rotation planner
 //   ids        – present player ids, in roster order
 //   S          – subs per half
@@ -101,7 +198,7 @@ function fmtMin(min) { return fmtClock(min); }
 // sub a full line change). One extra handoff is allowed if a keeper would otherwise end
 // up a full block ahead of the player they displace.
 // ============================================================
-function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], played = [], gkEligible }) {
+function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], played = [], gkEligible, prefsOf, posMins, prevSlots }) {
   const B = blockCount(S), L = blockLen(S);
   const n = ids.length;
   const mins = {};
@@ -136,6 +233,9 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
   const othersH1 = n > 2 ? (HALF_MIN * ON_FIELD - HALF_MIN - (target - HALF_MIN)) / (n - 2) : 0;
   const h2Credit = Math.max(0, othersH1 - (target - HALF_MIN));
   const seen = new Set([...played, ...on].filter(id => ids.includes(id)));
+  const pm = {};
+  ids.forEach(id => { pm[id] = Object.assign({}, (posMins || {})[id]); });
+  let lastSlots = prevSlots || null;
 
   for (let b = fromBlock; b < B; b++) {
     const half = b <= S ? 1 : 2;
@@ -188,15 +288,21 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
     if (nextGk) keepers.add(nextGk);
 
     lineup = sorted.filter(id => lineup.includes(id)); // keep min-order
+    const slots = assignSlots({ on: lineup, gk: nextGk, prefsOf, posMins: pm, prev: lastSlots });
     blocks.push({
       index: b, half, start: b * L, end: (b + 1) * L,
-      on: lineup, gk: nextGk, bench: ids.filter(id => !lineup.includes(id)),
+      on: lineup, gk: nextGk, bench: ids.filter(id => !lineup.includes(id)), slots,
     });
+    Object.keys(slots).forEach(sid => {
+      const pid = slots[sid], grp = slotById(sid).pos;
+      pm[pid][grp] = (pm[pid][grp] || 0) + L;
+    });
+    lastSlots = slots;
     lineup.forEach(id => { mins[id] += L; seen.add(id); });
     on = new Set(lineup);
     curGk = nextGk;
   }
-  return { blocks, projected: mins, h1gk: firstGk, h2gk: secondGk };
+  return { blocks, projected: mins, projectedPos: pm, h1gk: firstGk, h2gk: secondGk };
 }
 
 // Swap list between two consecutive block lineups
@@ -217,6 +323,7 @@ const byId = id => state.roster.find(p => p.id === id);
 const nameOf = id => (window.__nameOverride ? window.__nameOverride(id) : (byId(id) || { name: '?' }).name);
 const presentIds = () => state.roster.filter(p => p.present).map(p => p.id);
 const gkEligibleSet = () => new Set(state.roster.filter(p => p.gk).map(p => p.id));
+const prefsOf = id => ((byId(id) || {}).prefs || []);
 // Carry-over is "minutes above fair share" — players who are ahead start with a head start
 // in the planner's tally so they get lower priority this game.
 const seedMinutes = ids => {
@@ -233,7 +340,22 @@ function kickoffPlanInputs() {
   return {
     ids, S: state.subsPerHalf, minutes: seedMinutes(ids),
     starters: activeStarters(), h1gk: activeStartGk(), gkEligible: gkEligibleSet(),
+    prefsOf, posMins: seasonPosMins(ids),
   };
+}
+// Minutes each player has spent in each position across saved games, so the plan can
+// spread positions over the season the way it spreads minutes.
+function seasonPosMins(ids) {
+  const out = {};
+  ids.forEach(id => { out[id] = {}; });
+  if (!state.useCarryOver) return out;
+  state.history.forEach(h => {
+    Object.keys(h.posMinutes || {}).forEach(id => {
+      if (!out[id]) return;
+      Object.keys(h.posMinutes[id]).forEach(g => { out[id][g] = (out[id][g] || 0) + h.posMinutes[id][g]; });
+    });
+  });
+  return out;
 }
 
 // ============================================================
@@ -242,7 +364,7 @@ function kickoffPlanInputs() {
 function newGame() {
   const ids = presentIds();
   const players = {};
-  ids.forEach(id => { players[id] = { playedMs: 0, onField: false, onSinceMs: 0, availMs: 0, inSinceMs: 0 }; });
+  ids.forEach(id => { players[id] = { playedMs: 0, onField: false, onSinceMs: 0, availMs: 0, inSinceMs: 0, posMs: {}, slot: null, slotSince: null }; });
   const g = {
     phase: 'h1',            // h1 | halftime | h2 | done
     running: false,
@@ -261,8 +383,10 @@ function newGame() {
   const first = plan.blocks[0];
   first.on.forEach(id => { players[id].onField = true; players[id].onSinceMs = 0; });
   g.gk = first.gk; g.h1gk = plan.h1gk; g.h2gk = plan.h2gk;
-  g.plan = plan.blocks.map(b => ({ index: b.index, on: b.on, gk: b.gk }));
+  g.plan = plan.blocks.map(b => ({ index: b.index, on: b.on, gk: b.gk, slots: b.slots }));
   g.log = [];
+  g.slots = {};
+  resyncSlots();
   logLineup();
   save();
 }
@@ -273,8 +397,9 @@ function logLineup() {
   if (!g) return;
   const on = Object.keys(g.players).filter(id => g.players[id].onField).sort();
   const last = g.log[g.log.length - 1];
-  if (last && last.gk === g.gk && last.on.join() === on.join()) return;
-  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, on, gk: g.gk });
+  const slots = Object.assign({}, g.slots);
+  if (last && last.gk === g.gk && last.on.join() === on.join()) { if (last) last.slots = slots; return; }
+  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, on, gk: g.gk, slots });
 }
 
 function elapsedMs() {
@@ -309,6 +434,57 @@ function fairShares() {
   ids.forEach(id => { shares[id] = sumAvail > 0 ? sumPlayed * avail[id] / sumAvail : 0; });
   return shares;
 }
+
+// ---- position time ----
+function posMsOf(id, group) {
+  const p = state.game.players[id];
+  if (!p) return 0;
+  let ms = (p.posMs || {})[group] || 0;
+  if (p.slot && p.slotSince != null && slotById(p.slot) && slotById(p.slot).pos === group) {
+    ms += elapsedMs() - p.slotSince;
+  }
+  return ms;
+}
+function posMinsNow() {
+  const out = {};
+  Object.keys(state.game.players).forEach(id => {
+    out[id] = {};
+    POS.forEach(P => { const m = posMsOf(id, P.id) / 60000; if (m > 0) out[id][P.id] = m; });
+  });
+  return out;
+}
+// Bank the time each player has spent in their current slot, then clear the slots
+function commitPos() {
+  const g = state.game, now = elapsedMs();
+  Object.keys(g.players).forEach(id => {
+    const p = g.players[id];
+    p.posMs = p.posMs || {};
+    if (p.slot && p.slotSince != null) {
+      const grp = slotById(p.slot).pos;
+      p.posMs[grp] = (p.posMs[grp] || 0) + (now - p.slotSince);
+    }
+    p.slot = null; p.slotSince = null;
+  });
+}
+// Re-deal the seven slots after any lineup change, keeping players where they are when it
+// makes no difference to preference or balance.
+function resyncSlots() {
+  const g = state.game;
+  if (!g) return;
+  const prev = {};
+  Object.keys(g.players).forEach(id => { if (g.players[id].slot) prev[g.players[id].slot] = id; });
+  commitPos();
+  const on = Object.keys(g.players).filter(id => g.players[id].onField);
+  const slots = assignSlots({ on, gk: g.gk, prefsOf, posMins: posMinsNow(), prev });
+  const now = elapsedMs();
+  g.slots = slots;
+  Object.keys(slots).forEach(sid => {
+    const p = g.players[slots[sid]];
+    if (p) { p.slot = sid; p.slotSince = now; }
+  });
+}
+const slotOf = id => (state.game.players[id] || {}).slot || null;
+const slotLabel = id => { const sl = slotById(slotOf(id)); return sl ? sl.label : ''; };
 
 function setOnField(id, on) {
   const g = state.game, p = g.players[id];
@@ -365,6 +541,15 @@ function tick() {
 }
 
 const playedIds = ids => ids.filter(id => playedMs(id) > 0);
+// Position minutes so far: this game plus the season, so the plan keeps spreading positions
+function livePosMins(ids) {
+  const season = seasonPosMins(ids), now = posMinsNow(), out = {};
+  ids.forEach(id => {
+    out[id] = Object.assign({}, season[id]);
+    Object.keys(now[id] || {}).forEach(g => { out[id][g] = (out[id][g] || 0) + now[id][g]; });
+  });
+  return out;
+}
 
 function currentMinutes() {
   const g = state.game;
@@ -405,11 +590,13 @@ function subForBlock(target, ids, onField, gk, minutes) {
   if (ov) {
     const on2 = onField.filter(id => !ov.off.includes(id)).concat(ov.on);
     const gk2 = pickGk(target, on2, gk, minutes);
-    const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)) };
+    const slots = assignSlots({ on: on2, gk: gk2, prefsOf, posMins: livePosMins(ids), prev: g.slots });
+    const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)), slots };
     return { block, diff: { off: ov.off, on: ov.on, gk: gk2 !== gk ? gk2 : null }, manual: true, plan: null };
   }
   const plan = planFrom({
-    ids, S, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids), gkEligible: gkEligibleSet(),
+    ids, S, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
+    gkEligible: gkEligibleSet(), prefsOf, posMins: livePosMins(ids), prevSlots: g.slots,
   });
   if (!plan.blocks.length) return null;
   return { block: plan.blocks[0], diff: diffLineups(onField, gk, plan.blocks[0]), manual: false, plan };
@@ -424,9 +611,9 @@ function suggestForBlock(b, title) {
   if (sub.plan) g.h2gk = sub.plan.h2gk;
   const d = sub.diff;
   if (!d.off.length && !d.on.length && !d.gk) {
-    g.pending = { title, off: [], on: [], gk: null, note: 'No change needed. The lineup is already balanced.', block: b };
+    g.pending = { title, off: [], on: [], gk: null, note: 'No change needed. The lineup is already balanced.', block: b, slots: sub.block.slots };
   } else {
-    g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, block: b };
+    g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, block: b, slots: sub.block.slots };
   }
   if (g.nextOverride && g.nextOverride.block <= b) g.nextOverride = null;
   g.editNext = false;
@@ -440,6 +627,7 @@ function applyPending() {
   if (p.gk) g.gk = p.gk;
   if (g.phase === 'h1' && g.gk) g.h1gk = g.gk;
   g.pending = null; g.selected = null;
+  resyncSlots();
   logLineup();
   save();
 }
@@ -455,7 +643,9 @@ function adHocSuggestion() {
   if (playedMin(inId) >= playedMin(outId) - 0.25) {
     return { title: 'Already balanced', off: [], on: [], gk: null, note: 'The bench has as many minutes as the field. Wait for the next scheduled sub.' };
   }
-  return { title: 'Suggested sub', off: [outId], on: [inId], gk: null };
+  const after = ids.filter(id => g.players[id].onField && id !== outId).concat(inId);
+  const slots = assignSlots({ on: after, gk: g.gk, prefsOf, posMins: livePosMins(ids), prev: g.slots });
+  return { title: 'Suggested sub', off: [outId], on: [inId], gk: null, slots };
 }
 
 function endGame() {
@@ -475,16 +665,18 @@ function finalMinutes() {
 
 function saveToSeason() {
   const g = state.game;
+  commitPos();
   const minutes = finalMinutes();
   const shares = fairShares();
   const ids = Object.keys(minutes);
-  const avail = {}, names = {};
-  ids.forEach(id => { avail[id] = availableMin(id); names[id] = nameOf(id); });
+  const avail = {}, names = {}, posMinutes = {}, prefs = {};
+  const pmNow = posMinsNow();
+  ids.forEach(id => { avail[id] = availableMin(id); names[id] = nameOf(id); posMinutes[id] = pmNow[id] || {}; prefs[id] = prefsOf(id).slice(); });
   state.history.push({
     id: 'g' + Date.now(),
     date: new Date().toISOString().slice(0, 10),
     subsPerHalf: g.subsPerHalf,
-    players: ids, names, minutes, shares, avail,
+    players: ids, names, minutes, shares, avail, posMinutes, prefs,
     h1gk: g.h1gk, h2gk: g.h2gk,
     plan: g.plan || [], log: g.log || [],
   });
@@ -553,9 +745,11 @@ function renderSetup() {
   const n = ids.length, subs = Math.max(0, n - ON_FIELD);
   $('attendance-summary').textContent = n + ' here, ' + subs + ' sub' + (subs === 1 ? '' : 's') +
     (n >= ON_FIELD ? ', about ' + fmtMin(fairTarget(n)) + ' each' : '');
-  const gkCount = state.roster.filter(p => p.present && p.gk).length;
-  $('gk-hint').textContent = gkCount === 0 ? 'No keepers marked, so anyone here may be put in goal.' :
-    gkCount === 1 ? 'Only one keeper marked. They will be in goal all game.' : '';
+  const gkCount = state.roster.filter(p => p.present && p.prefs.includes('GK')).length;
+  const noPos = state.roster.filter(p => p.present && !p.prefs.length).map(p => p.name);
+  $('gk-hint').textContent = (gkCount === 0 ? 'No keepers listed, so anyone here may be put in goal. ' :
+    gkCount === 1 ? 'Only one keeper listed. They will be in goal all game. ' : '') +
+    (noPos.length ? 'No positions listed for ' + noPos.join(', ') + ', so they can be played anywhere.' : '');
 
   const ul = $('roster');
   ul.innerHTML = '';
@@ -565,8 +759,10 @@ function renderSetup() {
     li.innerHTML =
       '<button class="tag present-tag ' + (p.present ? 'on' : '') + '" data-act="present" data-id="' + p.id + '">' + (p.present ? 'IN' : 'OUT') + '</button>' +
       '<span class="name" data-act="present" data-id="' + p.id + '">' + esc(p.name) + '</span>' +
-      '<button class="tag ' + (p.gk ? 'on' : '') + '" data-act="gk" data-id="' + p.id + '">GK</button>' +
-      '<button class="edit" data-act="edit" data-id="' + p.id + '" aria-label="Rename">✎</button>';
+      '<button class="edit" data-act="edit" data-id="' + p.id + '" aria-label="Rename">✎</button>' +
+      '<span class="posrow">' + POS.map(P =>
+        '<button class="tag pos ' + (p.prefs.includes(P.id) ? 'on' : '') + '" data-act="pos" data-id="' + p.id +
+        '" data-pos="' + P.id + '" title="' + esc(P.name) + '">' + esc(P.label) + '</button>').join('') + '</span>';
     ul.appendChild(li);
   });
 
@@ -658,7 +854,8 @@ function planGridHtml(ids, blocks, S, totals, currentIndex) {
     blocks.forEach(b => {
       const cls = (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now ' : '') +
         (b.gk === id ? 'gk' : b.on.includes(id) ? 'on' : '');
-      html += '<td class="' + cls + '">' + (b.gk === id ? 'GK' : b.on.includes(id) ? '●' : '') + '</td>';
+      const sl = slotById(slotOfPlayer(b.slots, id));
+      html += '<td class="' + cls + '">' + (b.gk === id ? 'GK' : b.on.includes(id) ? (sl ? esc(sl.label) : '●') : '') + '</td>';
     });
     html += '<td class="total">' + fmtMin(totals[id]) + '</td></tr>';
   });
@@ -672,14 +869,20 @@ function swapLineHtml(d) {
   return parts.join('  ') || 'no change';
 }
 // The red/green sub board panels for a swap, plus a footer line for keeper / warnings
-function boardPanelsHtml(d, extra) {
-  const list = ids => ids.length ? ids.map(id => '<li>' + esc(nameOf(id)) + '</li>').join('') : '<li class="none">nobody</li>';
+function boardPanelsHtml(d, extra, slots) {
+  const at = id => {
+    const sl = slotById(slotOfPlayer(slots || {}, id));
+    return sl && sl.id !== 'GK' ? ' <span class="at">' + esc(sl.label) + '</span>' : '';
+  };
+  const list = (ids, withSlot) => ids.length
+    ? ids.map(id => '<li>' + esc(nameOf(id)) + (withSlot ? at(id) : '') + '</li>').join('')
+    : '<li class="none">nobody</li>';
   let foot = '';
   if (d.gk) foot += '<span class="gkline"><b>GK</b>' + esc(nameOf(d.gk)) + '</span>';
   if (extra) foot += extra;
   return '<div class="board-panels">' +
-    '<div class="board-panel off"><h4>OFF</h4><ul>' + list(d.off) + '</ul></div>' +
-    '<div class="board-panel on"><h4>ON</h4><ul>' + list(d.on) + '</ul></div></div>' +
+    '<div class="board-panel off"><h4>OFF</h4><ul>' + list(d.off, false) + '</ul></div>' +
+    '<div class="board-panel on"><h4>ON</h4><ul>' + list(d.on, true) + '</ul></div></div>' +
     (foot ? '<div class="board-foot">' + foot + '</div>' : '');
 }
 function planSwapsHtml(blocks, S) {
@@ -731,7 +934,7 @@ function liveForecast() {
   const minutes = currentMinutes();
   const remain = Math.max(0, Math.min(blockStart(S, b + 1), GAME_MIN) - min);
   onField.forEach(id => { minutes[id] += remain; });
-  const current = { index: b, half: b <= S ? 1 : 2, start: blockStart(S, b), end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)) };
+  const current = { index: b, half: b <= S ? 1 : 2, start: blockStart(S, b), end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)), slots: g.slots || {} };
   let blocks = [current], next = null, projected = minutes;
   if (b + 1 < B) {
     const sub = subForBlock(b + 1, ids, onField, gk, minutes);
@@ -746,6 +949,7 @@ function liveForecast() {
         const rest = planFrom({
           ids, S, minutes: minutes2, fromBlock: b + 2, onField: sub.block.on, gk: sub.block.gk,
           h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids).concat(sub.block.on), gkEligible: gkEligibleSet(),
+          prefsOf, posMins: livePosMins(ids), prevSlots: sub.block.slots,
         });
         blocks = blocks.concat(rest.blocks);
         projected = rest.projected;
@@ -843,7 +1047,7 @@ function renderGame() {
     if (over) extra += '<span class="warn">That puts ' + after + ' on the field. Dismiss and sub by hand.</span>';
     $('banner-body').innerHTML = p.note
       ? '<div class="board-foot">' + esc(p.note) + '</div>'
-      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra);
+      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots);
     $('banner-apply').hidden = !!p.note;
     $('banner-apply').disabled = over;
     banner.hidden = false;
@@ -874,13 +1078,13 @@ function renderGame() {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
     previewEl.innerHTML = '<div class="board-strip"><span>Editing next sub</span>' +
       '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '') +
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
       '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>';
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
     previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '');
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots);
     previewEl.hidden = false;
   } else if (canEdit && !g.pending) {
     previewEl.innerHTML = '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>';
@@ -902,6 +1106,13 @@ function renderGame() {
   // GK badge only on players marked as keepers (everyone, if none are marked)
   const anyKeeper = state.roster.some(p => p.present && p.gk);
   const keeper = id => !anyKeeper || byId(id).gk;
+  const nextSlots = (g.pending && g.pending.slots) || (next && next.block.slots) || {};
+  const slotTag = id => {
+    const here = slotLabel(id);
+    if (here) return '<span class="slot">' + esc(here) + '</span>';
+    const to = slotById(slotOfPlayer(nextSlots, id));
+    return to && nextOn.has(id) ? '<span class="slot next">→ ' + esc(to.label) + '</span>' : '';
+  };
   const gkBadge = (id, onField) => !keeper(id) ? '' :
     onField ? '<button class="gkbtn" data-gk="' + id + '" aria-label="Make keeper">GK</button>' : '<span class="gkbtn static">GK</span>';
   // In edit mode the card's right side becomes a next-off / next-on toggle
@@ -916,12 +1127,12 @@ function renderGame() {
   $('bench-count').textContent = String(bench.length);
   $('field-list').innerHTML = field.map(id =>
     '<li data-id="' + id + '" class="' + (g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, true) : '') + cls(id) + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + (editing ? '' : tag(id)) + '</span>' +
+    '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>' +
     (editing ? '<small class="pproj">' + (nextOff.has(id) ? 'Off next' : 'Stays on') + '</small>' + toggle(id, true)
              : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, true)) + '</li>').join('');
   $('bench-list').innerHTML = bench.map(id =>
     '<li data-id="' + id + '" class="' + (g.selected === id ? 'selected ' : '') + (editing ? 'editing ' + pickedCls(id, false) : '') + cls(id) + '">' +
-    '<span class="pname">' + esc(nameOf(id)) + (editing ? '' : tag(id)) + '</span>' +
+    '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>' +
     (editing ? '<small class="pproj">' + (nextOn.has(id) ? 'On next' : 'Stays off') + '</small>' + toggle(id, false)
              : proj(id) + '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, false)) + '</li>').join('') ||
     '<li class="muted">No subs</li>';
@@ -951,7 +1162,7 @@ function subNow() {
   const off = d.off.filter(id => g.players[id] && g.players[id].onField);
   const on = d.on.filter(id => g.players[id] && !g.players[id].onField);
   if (!off.length && !on.length && !d.gk) return;
-  g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: blockAt(g.subsPerHalf, elapsedMin()) };
+  g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: blockAt(g.subsPerHalf, elapsedMin()), slots: fc.next.block.slots };
   applyPending();
   g.nextOverride = null;
   g.editNext = false;
@@ -994,6 +1205,7 @@ function setGk(id) {
   if (!g || !g.players[id] || !g.players[id].onField) return;
   g.gk = id;
   if (g.phase === 'h1') g.h1gk = id;
+  resyncSlots();
   logLineup();
   save();
   renderGame();
@@ -1020,7 +1232,7 @@ function toggleMidGame(id) {
   p.present = !p.present;
   const now = elapsedMs();
   if (p.present) {
-    if (!g.players[id]) g.players[id] = { playedMs: 0, onField: false, onSinceMs: 0, availMs: 0, inSinceMs: now };
+    if (!g.players[id]) g.players[id] = { playedMs: 0, onField: false, onSinceMs: 0, availMs: 0, inSinceMs: now, posMs: {}, slot: null, slotSince: null };
     else if (g.players[id].inSinceMs == null) g.players[id].inSinceMs = now;
   } else if (g.players[id]) {
     const gp = g.players[id];
@@ -1029,10 +1241,18 @@ function toggleMidGame(id) {
     if (g.selected === id) g.selected = null;
   }
   g.pending = null;
+  resyncSlots();
   logLineup();
   save();
   renderModal();
   renderGame();
+}
+
+// ---------- Positions ----------
+function togglePos(p, posId) {
+  p.prefs = p.prefs.includes(posId) ? p.prefs.filter(x => x !== posId) : p.prefs.concat(posId);
+  p.gk = p.prefs.includes('GK');
+  if (!p.gk && state.startGk === p.id) state.startGk = null;
 }
 
 // ---------- Summary ----------
@@ -1051,11 +1271,12 @@ function showSummary() {
     (full.length ? fmtMin(shares[full[0]]) : '—') +
     (partTime.length ? ' (' + partTime.length + ' part-time, pro-rated)' : '') +
     '. Gap between most and least: ' + fmtClock(spread) + '.';
+  const pm = posMinsNow();
   $('summary-table').innerHTML = '<tr><th>Player</th><th>vs. fair</th><th>Minutes</th></tr>' + ids.map(id => {
     const d = minutes[id] - shares[id];
-    const note = (id === g.h1gk || id === g.h2gk || id === g.gk ? ' (GK)' : '') +
-      (partTime.includes(id) ? ' (' + fmtMin(availableMin(id)) + ' avail.)' : '');
-    return '<tr><td>' + esc(nameOf(id)) + (note ? ' <span class="muted">' + esc(note.trim()) + '</span>' : '') + '</td>' +
+    const note = partTime.includes(id) ? ' (' + fmtMin(availableMin(id)) + ' avail.)' : '';
+    return '<tr><td>' + esc(nameOf(id)) + (note ? ' <span class="muted">' + esc(note.trim()) + '</span>' : '') +
+      posLineHtml(pm[id], prefsOf(id)) + '</td>' +
       '<td class="' + (d < -0.5 ? 'neg' : d > 0.5 ? 'pos' : '') + '">' + (d >= 0 ? '+' : '−') + fmtClock(Math.abs(d)) + '</td>' +
       '<td>' + fmtMin(minutes[id]) + '</td></tr>';
   }).join('');
@@ -1063,6 +1284,15 @@ function showSummary() {
 }
 
 // ---------- Season ----------
+// "CM 18:45  W 12:30", biggest first
+function posLineHtml(pm, prefs) {
+  const keys = Object.keys(pm || {}).filter(k => pm[k] > 0.05).sort((a, c) => pm[c] - pm[a]);
+  if (!keys.length) return '';
+  return '<small class="posline">' + keys.map(k =>
+    '<span class="' + (prefs && prefs.length && !prefs.includes(k) ? 'offpref' : '') + '">' +
+    esc(posLabel(k)) + ' ' + fmtMin(pm[k]) + '</span>').join(' ') + '</small>';
+}
+
 const signed = d => (d >= 0 ? '+' : '−') + fmtClock(Math.abs(d));
 const signCls = d => (d < -0.5 ? 'neg' : d > 0.5 ? 'pos' : '');
 
@@ -1070,9 +1300,10 @@ function renderSeason() {
   const games = state.history;
   const played = {}, totalMin = {};
   games.forEach(h => Object.keys(h.minutes).forEach(id => { played[id] = (played[id] || 0) + 1; totalMin[id] = (totalMin[id] || 0) + h.minutes[id]; }));
+  const seasonPos = seasonPosMinsAll();
   const rows = state.roster.map(p => ({ p, d: state.carryOver[p.id] || 0 })).sort((a, c) => a.d - c.d);
   $('season-table').innerHTML = '<tr><th>Player</th><th>Games</th><th>Avg min</th><th>vs. fair</th></tr>' + rows.map(({ p, d }) =>
-    '<tr><td>' + esc(p.name) + '</td><td>' + (played[p.id] || 0) + '</td>' +
+    '<tr><td>' + esc(p.name) + posLineHtml(seasonPos[p.id], p.prefs) + '</td><td>' + (played[p.id] || 0) + '</td>' +
     '<td>' + (played[p.id] ? fmtMin(totalMin[p.id] / played[p.id]) : '—') + '</td>' +
     '<td class="' + signCls(d) + '">' + signed(d) + '</td></tr>').join('');
   $('season-games').textContent = games.length + ' game' + (games.length === 1 ? '' : 's') + ' saved';
@@ -1083,6 +1314,19 @@ function renderSeason() {
     return '<li data-game="' + esc(h.id || String(games.length - 1 - i)) + '"><span class="name">Game ' + n + ' · ' + esc(h.date) + '</span>' +
       '<span class="muted">' + Object.keys(h.minutes).length + ' players, ' + (h.subsPerHalf || '?') + ' subs per half, gap ' + fmtClock(spread) + '</span><span class="chev">›</span></li>';
   }).join('') : '<li class="muted">No games saved yet.</li>';
+}
+
+// Season position totals for everyone on the roster
+function seasonPosMinsAll() {
+  const out = {};
+  state.roster.forEach(p => { out[p.id] = {}; });
+  state.history.forEach(h => {
+    Object.keys(h.posMinutes || {}).forEach(id => {
+      if (!out[id]) out[id] = {};
+      Object.keys(h.posMinutes[id]).forEach(g => { out[id][g] = (out[id][g] || 0) + h.posMinutes[id][g]; });
+    });
+  });
+  return out;
 }
 
 function gameByKey(key) {
@@ -1111,7 +1355,7 @@ function renderGameDetail(key) {
     const mid = (b + 0.5) * L;
     const entry = [...log].reverse().find(e => e.t <= mid + 1e-6) || log[0];
     if (!entry) break;
-    blocks.push({ index: b, half: b <= S ? 1 : 2, start: b * L, end: (b + 1) * L, on: entry.on, gk: entry.gk, bench: ids.filter(id => !entry.on.includes(id)) });
+    blocks.push({ index: b, half: b <= S ? 1 : 2, start: b * L, end: (b + 1) * L, on: entry.on, gk: entry.gk, slots: entry.slots || {}, bench: ids.filter(id => !entry.on.includes(id)) });
   }
   window.__nameOverride = name;
   $('gd-actual-grid').innerHTML = blocks.length ? planGridHtml(ids, blocks, S, h.minutes, -1) : '<tr><td class="muted">No lineup log for this game.</td></tr>';
@@ -1124,7 +1368,7 @@ function renderGameDetail(key) {
     return '<li><b>' + (Math.abs(e.t - HALF_MIN) < 1e-6 ? 'Halftime' : when) + '</b> — ' + swapLineHtml(d) + '</li>';
   }).join('') || '<li class="muted">No subs recorded.</li>';
   // Planned grid (what the app suggested before kickoff)
-  const plan = (h.plan || []).map(b => ({ index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on: b.on, gk: b.gk, bench: [] }));
+  const plan = (h.plan || []).map(b => ({ index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on: b.on, gk: b.gk, slots: b.slots || {}, bench: [] }));
   const planTotals = {};
   ids.forEach(id => { planTotals[id] = plan.filter(b => b.on.includes(id)).length * L; });
   $('gd-plan-grid').innerHTML = plan.length ? planGridHtml(ids, plan, S, planTotals, -1) : '<tr><td class="muted">No plan saved for this game.</td></tr>';
@@ -1134,7 +1378,8 @@ function renderGameDetail(key) {
   const partTime = id => h.avail && Math.abs(h.avail[id] - GAME_MIN) > 0.5;
   $('gd-table').innerHTML = '<tr><th>Player</th><th>vs. fair</th><th>Minutes</th></tr>' + sorted.map(id => {
     const d = h.minutes[id] - (h.shares[id] || 0);
-    return '<tr><td>' + esc(name(id)) + (partTime(id) ? ' <span class="muted">(' + fmtMin(h.avail[id]) + ' avail.)</span>' : '') + '</td>' +
+    return '<tr><td>' + esc(name(id)) + (partTime(id) ? ' <span class="muted">(' + fmtMin(h.avail[id]) + ' avail.)</span>' : '') +
+      posLineHtml((h.posMinutes || {})[id], (h.prefs || {})[id]) + '</td>' +
       '<td class="' + signCls(d) + '">' + signed(d) + '</td><td>' + fmtMin(h.minutes[id]) + '</td></tr>';
   }).join('');
   $('view-gamedetail').dataset.key = key;
@@ -1151,7 +1396,7 @@ $('roster').addEventListener('click', e => {
   if (!t) return;
   const p = byId(t.dataset.id);
   if (t.dataset.act === 'present') p.present = !p.present;
-  else if (t.dataset.act === 'gk') p.gk = !p.gk;
+  else if (t.dataset.act === 'pos') togglePos(p, t.dataset.pos);
   else if (t.dataset.act === 'edit') {
     const name = prompt('Player name', p.name);
     if (name && name.trim()) p.name = name.trim().slice(0, 24);

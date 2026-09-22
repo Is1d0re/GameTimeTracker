@@ -8,10 +8,13 @@ A phone app for youth soccer coaches that makes equal play time automatic. Works
 - Builds a rotation plan before kickoff based on who showed up (7–11 players) and how often you want to sub
 - Alerts you (buzz + beep) at every sub time with exactly who goes off and on — one tap to apply
 - Rotates the goalkeeper at halftime (and to a third keeper if that keeps minutes even)
+- Puts each player in a position they actually play, and spreads their time across those positions
 - Handles late arrivals and injuries mid-game
 - Remembers who was short-changed so it evens out over the season
 
-Game format: 7 on the field, 2 × 25-minute halves, water break mid-half.
+Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half.
+
+Positions: **GK** (1), **CB** (4/5, two slots), **W** (7/11, the two wide slots that cover both back and winger), **CM** (8), **ST** (9).
 
 ## Install on your phone
 
@@ -24,7 +27,7 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 
 ## Using it on game day
 
-1. **Roster** — tap a name to toggle IN/OUT for today. Tap ✎ to rename. Untoggle GK for kids who shouldn't play keeper.
+1. **Roster** — tap a name to toggle IN/OUT for today. Tap ✎ to rename. Under each name, toggle the positions that player can play; the plan puts them in one of those and rotates them through the rest. A player with nothing marked can be played anywhere.
 2. **Starters** (optional) — tap up to 7 players to start on the field and pick the starting keeper. Anyone you don't pick is filled in by the plan.
 3. **Subs per half** — how many times you want to swap kids in each half. More subs = shorter shifts (better in the heat) and tighter fairness. The schedule and expected minutes update as you change it.
 4. **Show plan** (optional) — the full rotation grid; screenshot it as a backup.
@@ -33,6 +36,8 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 7. To sub manually: tap a bench player, then the field player they replace. Tap **GK** on a field player to make them keeper.
 8. **Attendance** lets you add a late arrival or mark a player out (injured).
 9. At full time, review the summary and tap **Save to season** so next game's plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share, so they aren't "owed" minutes they weren't there for.
+
+Minutes in each position appear under every player's name on the summary and season screens, in red when the position isn't one they're marked for. If a player keeps landing somewhere they don't want, mark that position for more of the squad — with only two or three kids marked for a position, someone else has to fill it.
 
 ## Deploy (for whoever hosts it)
 
