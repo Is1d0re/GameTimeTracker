@@ -779,14 +779,20 @@ function renderSetup() {
   ul.innerHTML = '';
   state.roster.forEach(p => {
     const li = document.createElement('li');
-    li.className = p.present ? '' : 'absent';
+    const open = state.editRow === p.id;
+    li.className = (p.present ? '' : 'absent ') + (open ? 'open' : '');
+    const tags = p.prefs.length
+      ? POS.filter(P => p.prefs.includes(P.id)).map(P => '<span class="ptag">' + esc(P.label) + '</span>').join('')
+      : '<span class="ptag any">any</span>';
     li.innerHTML =
       '<button class="tag present-tag ' + (p.present ? 'on' : '') + '" data-act="present" data-id="' + p.id + '">' + (p.present ? 'IN' : 'OUT') + '</button>' +
       '<span class="name" data-act="present" data-id="' + p.id + '">' + esc(p.name) + '</span>' +
-      '<button class="edit" data-act="edit" data-id="' + p.id + '" aria-label="Rename">✎</button>' +
-      '<span class="posrow">' + POS.map(P =>
+      (open ? '' : '<span class="ptags">' + tags + '</span>') +
+      '<button class="edit" data-act="edit" data-id="' + p.id + '" aria-label="' + (open ? 'Close' : 'Edit ' + esc(p.name)) + '">' + (open ? 'Done' : '✎') + '</button>' +
+      (open ? '<span class="posrow">' + POS.map(P =>
         '<button class="tag pos ' + (p.prefs.includes(P.id) ? 'on' : '') + '" data-act="pos" data-id="' + p.id +
-        '" data-pos="' + P.id + '" title="' + esc(P.name) + '">' + esc(P.label) + '</button>').join('') + '</span>';
+        '" data-pos="' + P.id + '" title="' + esc(P.name) + '">' + esc(P.label) + '</button>').join('') +
+        '<button class="tag rename" data-act="rename" data-id="' + p.id + '">Rename</button></span>' : '');
     ul.appendChild(li);
   });
 
@@ -893,20 +899,49 @@ function swapLineHtml(d) {
   return parts.join('  ') || 'no change';
 }
 // The red/green sub board panels for a swap, plus a footer line for keeper / warnings
-function boardPanelsHtml(d, extra, slots) {
-  const at = id => {
-    const sl = slotById(slotOfPlayer(slots || {}, id));
-    return sl && sl.id !== 'GK' ? ' <span class="at">' + esc(sl.label) + '</span>' : '';
+// Pair every incoming player with the player they replace and the slot they take, so the
+// coach reads one row per swap instead of matching two lists by eye.
+function subPairs(d, newSlots, oldSlots) {
+  const free = d.off.slice(), pairs = [];
+  d.on.forEach(inId => {
+    const slot = slotOfPlayer(newSlots || {}, inId);
+    const held = slot ? (oldSlots || {})[slot] : null;
+    const i = held ? free.indexOf(held) : -1;      // whoever was standing in that slot
+    pairs.push({ on: inId, off: i >= 0 ? free.splice(i, 1)[0] : null, slot });
+  });
+  pairs.forEach(p => { if (!p.off && free.length) p.off = free.shift(); });
+  free.forEach(id => pairs.push({ on: null, off: id, slot: null }));
+  return pairs;
+}
+// Players who stay on but shift position
+function slotMoves(newSlots, oldSlots, incoming) {
+  const moves = [];
+  Object.keys(newSlots || {}).forEach(sid => {
+    const pid = newSlots[sid];
+    if (incoming.indexOf(pid) >= 0) return;
+    const was = slotOfPlayer(oldSlots || {}, pid);
+    if (was && was !== sid) moves.push({ id: pid, to: sid });
+  });
+  return moves;
+}
+function boardPanelsHtml(d, extra, newSlots, oldSlots) {
+  const pairs = subPairs(d, newSlots, oldSlots);
+  const moves = slotMoves(newSlots, oldSlots, d.on);
+  const cell = (id, side) => '<div class="sub-cell ' + side + '">' +
+    (id ? esc(nameOf(id)) : '<span class="none">nobody</span>') + '</div>';
+  const rail = slot => {
+    const sl = slotById(slot);
+    return '<div class="sub-rail">' + (sl ? '<span class="slotchip' + (sl.id === 'GK' ? ' gk' : '') + '">' + esc(sl.label) + '</span>' : '') + '</div>';
   };
-  const list = (ids, withSlot) => ids.length
-    ? ids.map(id => '<li>' + esc(nameOf(id)) + (withSlot ? at(id) : '') + '</li>').join('')
-    : '<li class="none">nobody</li>';
+  let rows = '<div class="sub-head off">Off</div><div class="sub-rail"></div><div class="sub-head on">On</div>';
+  if (!pairs.length) rows += '<div class="sub-cell off"><span class="none">nobody</span></div><div class="sub-rail"></div><div class="sub-cell on"><span class="none">nobody</span></div>';
+  pairs.forEach(p => { rows += cell(p.off, 'off') + rail(p.slot) + cell(p.on, 'on'); });
   let foot = '';
   if (d.gk) foot += '<span class="gkline"><b>GK</b>' + esc(nameOf(d.gk)) + '</span>';
+  if (moves.length) foot += '<span class="moves">Also ' + moves.map(mv =>
+    esc(nameOf(mv.id)) + ' to ' + esc(slotById(mv.to).label)).join(', ') + '</span>';
   if (extra) foot += extra;
-  return '<div class="board-panels">' +
-    '<div class="board-panel off"><h4>OFF</h4><ul>' + list(d.off, false) + '</ul></div>' +
-    '<div class="board-panel on"><h4>ON</h4><ul>' + list(d.on, true) + '</ul></div></div>' +
+  return '<div class="board-subs">' + rows + '</div>' +
     (foot ? '<div class="board-foot">' + foot + '</div>' : '');
 }
 function planSwapsHtml(blocks, S) {
@@ -1074,7 +1109,7 @@ function renderGame() {
       '. Tap Edit next sub to fix it.</span>';
     setHtml($('banner-body'), p.note
       ? '<div class="board-foot">' + esc(p.note) + '</div>'
-      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots));
+      : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots, g.slots));
     $('banner-apply').hidden = !!p.note;
     $('banner-apply').disabled = over;
     banner.hidden = false;
@@ -1105,13 +1140,13 @@ function renderGame() {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
     setHtml(previewEl, '<div class="board-strip"><span>Editing next sub</span>' +
       '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots) +
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
       '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>');
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
     setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
-      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots));
+      boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots));
     previewEl.hidden = false;
   } else if (canEdit && !g.pending) {
     setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>');
@@ -1251,7 +1286,6 @@ function renderModal() {
   ul.innerHTML = '';
   state.roster.forEach(p => {
     const li = document.createElement('li');
-    li.className = p.present ? '' : 'absent';
     const status = p.present ? (g.players[p.id] && g.players[p.id].onField ? 'on field' : 'bench') : 'out';
     li.innerHTML =
       '<button class="tag present-tag ' + (p.present ? 'on' : '') + '" data-act="toggle" data-id="' + p.id + '">' + (p.present ? 'IN' : 'OUT') + '</button>' +
@@ -1430,7 +1464,8 @@ $('roster').addEventListener('click', e => {
   const p = byId(t.dataset.id);
   if (t.dataset.act === 'present') p.present = !p.present;
   else if (t.dataset.act === 'pos') togglePos(p, t.dataset.pos);
-  else if (t.dataset.act === 'edit') {
+  else if (t.dataset.act === 'edit') state.editRow = state.editRow === p.id ? null : p.id;
+  else if (t.dataset.act === 'rename') {
     const name = prompt('Player name', p.name);
     if (name && name.trim()) p.name = name.trim().slice(0, 24);
   }

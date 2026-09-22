@@ -1,5 +1,5 @@
 // Bump the version whenever any cached file changes so installed phones pick up the update.
-const CACHE = 'gametime-v22';
+const CACHE = 'gametime-v26';
 const FILES = [
   './',
   './index.html',
