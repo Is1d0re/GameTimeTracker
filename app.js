@@ -131,11 +131,18 @@ const NO_PREF = 30;        // player has no positions marked, so every slot is e
 const POS_TIME_W = 0.25;   // per minute already played in that position, to spread them around
 const STAY_BONUS = 2;      // keeping the same slot as last block
 
-function assignSlots({ on, gk, prefsOf, posMins, prev }) {
+function assignSlots({ on, gk, prefsOf, posMins, prev, fixed }) {
   const n = on.length, nS = SLOTS.length;
   if (!n) return {};
   const pref = id => (prefsOf ? prefsOf(id) : null) || [];
+  const pinned = fixed || {};
+  const pinnedOf = {};
+  Object.keys(pinned).forEach(sid => { pinnedOf[pinned[sid]] = sid; });
   const cost = on.map(id => SLOTS.map(sl => {
+    if (pinnedOf[id] || pinned[sl.id]) {
+      if (pinnedOf[id] === sl.id) return -2000;
+      if (pinnedOf[id] || pinned[sl.id]) return 2000;
+    }
     if (gk) {
       if (sl.id === 'GK') return id === gk ? -1000 : 1000;
       if (id === gk) return 1000;
@@ -468,14 +475,18 @@ function commitPos() {
 }
 // Re-deal the seven slots after any lineup change, keeping players where they are when it
 // makes no difference to preference or balance.
-function resyncSlots() {
+// `desired` pins players to slots — the arrangement the board just promised the coach,
+// including any pairing they set by hand. Anyone not pinned is dealt as usual.
+function resyncSlots(desired) {
   const g = state.game;
   if (!g) return;
   const prev = {};
   Object.keys(g.players).forEach(id => { if (g.players[id].slot) prev[g.players[id].slot] = id; });
   commitPos();
   const on = Object.keys(g.players).filter(id => g.players[id].onField);
-  const slots = assignSlots({ on, gk: g.gk, prefsOf, posMins: posMinsNow(), prev });
+  const fixed = {};
+  Object.keys(desired || {}).forEach(sid => { if (on.includes(desired[sid])) fixed[sid] = desired[sid]; });
+  const slots = assignSlots({ on, gk: g.gk, prefsOf, posMins: posMinsNow(), prev, fixed });
   const now = elapsedMs();
   g.slots = slots;
   Object.keys(slots).forEach(sid => {
@@ -565,10 +576,21 @@ function currentMinutes() {
 function validOverride(target, onField, ids) {
   const ov = state.game.nextOverride;
   if (!ov || ov.block !== target) return null;
+  const off = ov.off.filter(id => onField.includes(id));
+  const on = ov.on.filter(id => ids.includes(id) && !onField.includes(id));
   return {
-    off: ov.off.filter(id => onField.includes(id)),
-    on: ov.on.filter(id => ids.includes(id) && !onField.includes(id)),
+    off, on,
+    pairs: (ov.pairs || []).filter(pr => off.includes(pr[0]) && on.includes(pr[1])),
   };
+}
+// The slot an explicitly paired player should take: the one their partner is vacating
+function pinnedSlots(pairs, oldSlots) {
+  const fixed = {};
+  (pairs || []).forEach(pr => {
+    const sl = slotOfPlayer(oldSlots || {}, pr[0]);
+    if (sl) fixed[sl] = pr[1];
+  });
+  return fixed;
 }
 
 // Keeper for a manually built lineup: planned half keeper if on, else current keeper if
@@ -589,8 +611,11 @@ function subForBlock(target, ids, onField, gk, minutes) {
   const ov = validOverride(target, onField, ids);
   if (ov) {
     const on2 = onField.filter(id => !ov.off.includes(id)).concat(ov.on);
-    const gk2 = pickGk(target, on2, gk, minutes);
-    const slots = assignSlots({ on: on2, gk: gk2, prefsOf, posMins: livePosMins(ids), prev: g.slots });
+    // A player mapped onto the keeper takes the gloves
+    const gkPair = (ov.pairs || []).find(pr => pr[0] === gk);
+    const gk2 = gkPair ? gkPair[1] : pickGk(target, on2, gk, minutes);
+    const fixed = pinnedSlots(ov.pairs, g.slots);
+    const slots = assignSlots({ on: on2, gk: gk2, prefsOf, posMins: livePosMins(ids), prev: g.slots, fixed });
     const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)), slots };
     return { block, diff: { off: ov.off, on: ov.on, gk: gk2 !== gk ? gk2 : null }, manual: true, plan: null };
   }
@@ -616,7 +641,7 @@ function suggestForBlock(b, title) {
     g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, block: b, slots: sub.block.slots };
   }
   if (g.nextOverride && g.nextOverride.block <= b) g.nextOverride = null;
-  g.editNext = false;
+  g.editNext = false; g.editSel = null;
 }
 
 function applyPending() {
@@ -626,8 +651,9 @@ function applyPending() {
   p.on.forEach(id => setOnField(id, true));
   if (p.gk) g.gk = p.gk;
   if (g.phase === 'h1' && g.gk) g.h1gk = g.gk;
+  const desired = p.slots;
   g.pending = null; g.selected = null;
-  resyncSlots();
+  resyncSlots(desired);
   logLineup();
   save();
 }
@@ -1188,10 +1214,23 @@ function renderGame() {
   $('bench-count').textContent = String(bench.length);
   const projText = id => fc ? (isBehind(id) ? 'Short — on pace for ' : 'On pace for ') + fmtMin(fc.totals[id]) : '';
   const row = (id, onField) => {
+    const awaiting = editing && g.editSel === id;
     const liCls = (onField && g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') +
-      (editing ? 'editing ' + pickedCls(id, onField) : '') + cls(id);
+      (editing ? 'editing ' + (awaiting ? 'await ' : '') + pickedCls(id, onField) : '') + cls(id);
     const head = '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>';
-    const editNote = onField ? (nextOff.has(id) ? 'Off next' : 'Stays on') : (nextOn.has(id) ? 'On next' : 'Stays off');
+    // In edit mode the second line says what will happen, and who with
+    let editNote;
+    const partner = editing ? editPartner(id) : null;
+    if (onField) {
+      editNote = !nextOff.has(id) ? 'Stays on'
+        : partner ? nameOf(partner) + ' comes on here'
+        : awaiting ? 'Off — tap a bench player' : 'Off next';
+    } else {
+      const sl = partner ? slotById(slotOf(partner)) : null;
+      editNote = !nextOn.has(id) ? 'Stays off'
+        : partner ? 'On at ' + (sl ? sl.label : '?') + ' for ' + nameOf(partner)
+        : awaiting ? 'On — tap a field player' : 'On next';
+    }
     const tail = editing
       ? '<small class="pproj">' + editNote + '</small>' + toggle(id, onField)
       : '<small class="pproj">' + esc(projText(id)) + '</small>' +
@@ -1209,7 +1248,7 @@ function renderGame() {
   $('btn-edit-mode').classList.toggle('primary', editing);
   $('btn-edit-mode').classList.toggle('secondary', !editing);
   $('btn-suggest').disabled = bench.length === 0 || editing;
-  $('game-hint').textContent = editing ? 'Tap players to change who goes off or on. Sub now, or Done to wait for the whistle.'
+  $('game-hint').textContent = editing ? 'Tap a field player, then the bench player replacing them. Sub now, or Done to wait for the whistle.'
     : 'Tap Edit next sub to change the lineup or make an unplanned sub. Tap GK to change keeper.';
   $('btn-suggest').disabled = bench.length === 0;
 }
@@ -1233,7 +1272,7 @@ function subNow() {
   g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: blockAt(g.subsPerHalf, elapsedMin()), slots: fc.next.block.slots };
   applyPending();
   g.nextOverride = null;
-  g.editNext = false;
+  g.editNext = false; g.editSel = null;
   save();
   renderGame();
 }
@@ -1244,16 +1283,46 @@ function startEditNext() {
   const fc = liveForecast();
   if (!fc || !fc.next) return;
   if (!g.nextOverride || g.nextOverride.block !== fc.next.block.index) {
-    g.nextOverride = { block: fc.next.block.index, off: [...fc.next.diff.off], on: [...fc.next.diff.on] };
+    // Start from the plan, including which player replaces which
+    const pairs = subPairs(fc.next.diff, fc.next.block.slots, g.slots)
+      .filter(pr => pr.off && pr.on).map(pr => [pr.off, pr.on]);
+    g.nextOverride = { block: fc.next.block.index, off: [...fc.next.diff.off], on: [...fc.next.diff.on], pairs };
   }
-  g.editNext = true; g.selected = null;
+  g.editNext = true; g.editSel = null;
   save(); renderGame();
 }
+const editPartner = id => {
+  const ov = (state.game.nextOverride || {});
+  const pr = (ov.pairs || []).find(x => x[0] === id || x[1] === id);
+  return pr ? (pr[0] === id ? pr[1] : pr[0]) : null;
+};
+function unpair(ov, id) { ov.pairs = (ov.pairs || []).filter(pr => pr[0] !== id && pr[1] !== id); }
+
+// Tapping in edit mode: mark a player, then tap someone on the other side to map them
+// together. Tapping a marked player clears them.
 function toggleNextOverride(id) {
   const g = state.game, ov = g.nextOverride;
   if (!ov) return;
-  const side = g.players[id].onField ? 'off' : 'on';
-  ov[side] = ov[side].includes(id) ? ov[side].filter(x => x !== id) : ov[side].concat(id);
+  ov.pairs = ov.pairs || [];
+  const onField = g.players[id].onField;
+  const side = onField ? 'off' : 'on';
+  const marked = ov[side].includes(id);
+
+  if (marked) {                                  // clear this player
+    ov[side] = ov[side].filter(x => x !== id);
+    unpair(ov, id);
+    if (g.editSel === id) g.editSel = null;
+  } else {
+    ov[side] = ov[side].concat(id);
+    const sel = g.editSel;
+    if (sel && g.players[sel] && g.players[sel].onField !== onField && !editPartner(sel)) {
+      unpair(ov, id);
+      ov.pairs.push(onField ? [id, sel] : [sel, id]);
+      g.editSel = null;
+    } else {
+      g.editSel = id;                            // wait for a partner
+    }
+  }
   save(); renderGame();
 }
 // Field count after the next sub vs. what it should be; null when fine
@@ -1543,13 +1612,13 @@ $('banner-apply').addEventListener('click', () => { applyPending(); renderGame()
 $('banner-dismiss').addEventListener('click', () => { state.game.pending = null; save(); renderGame(); });
 $('clock-preview').addEventListener('click', e => {
   const g = state.game;
-  if (e.target.id === 'btn-edit-done') { g.editNext = false; save(); renderGame(); }
-  else if (e.target.id === 'btn-edit-reset') { g.nextOverride = null; save(); startEditNext(); }
+  if (e.target.id === 'btn-edit-done') { g.editNext = false; g.editSel = null; save(); renderGame(); }
+  else if (e.target.id === 'btn-edit-reset') { g.nextOverride = null; g.editSel = null; save(); startEditNext(); }
   else if (e.target.id === 'btn-sub-now') subNow();
 });
 $('btn-edit-mode').addEventListener('click', () => {
   const g = state.game;
-  if (g.editNext) { g.editNext = false; save(); renderGame(); } else startEditNext();
+  if (g.editNext) { g.editNext = false; g.editSel = null; save(); renderGame(); } else startEditNext();
 });
 $('btn-live-plan').addEventListener('click', () => {
   const card = $('live-plan-card');

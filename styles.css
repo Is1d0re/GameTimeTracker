@@ -259,12 +259,17 @@ table.plan th.now { color: var(--pitch-deep); }
 .tag-next.off { background: var(--off); color: #fff; }
 .tag-next.on { background: var(--on); color: #fff; }
 .players li.editing { border-color: var(--line); background: var(--paper); }
+.players li.await .pproj { font-weight: 700; }
 .players li.editing .pproj { color: var(--ink-soft); font-weight: 600; }
 .players .etoggle { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font: 800 18px/1 var(--display); color: #fff; }
 .players li.picked-off { background: var(--off); border-color: var(--off); border-left-color: var(--off); color: #fff; }
 .players li.picked-on { background: var(--on); border-color: var(--on); border-left-color: var(--on); color: #fff; }
 .players li.picked-off .pproj, .players li.picked-on .pproj { color: rgba(255,255,255,.9); }
 .players li.picked-off .etoggle, .players li.picked-on .etoggle { background: #fff; border-color: #fff; }
+/* the card waiting to be given a partner */
+.players li.await { outline: 3px dashed var(--pitch); outline-offset: -3px; background: var(--pitch-tint); }
+.players li.await.picked-off, .players li.await.picked-on { outline-color: rgba(255,255,255,.9); }
+.players li.await.picked-off .pproj, .players li.await.picked-on .pproj { color: #fff; }
 .players li.picked-off .etoggle { color: var(--off); }
 .players li.picked-on .etoggle { color: var(--on); }
 
