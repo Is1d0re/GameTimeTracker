@@ -37,7 +37,9 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 8. **Attendance** lets you add a late arrival or mark a player out (injured).
 9. At full time, review the summary and tap **Save to season** so next game's plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share, so they aren't "owed" minutes they weren't there for.
 
-Minutes in each position appear under every player's name on the summary and season screens, in red when the position isn't one they're marked for. If a player keeps landing somewhere they don't want, mark that position for more of the squad — with only two or three kids marked for a position, someone else has to fill it.
+Minutes in each position appear under every player's name on the game summary, and the **Season** screen has a **Time by position** table for the whole season — a column per position, red where it isn't one the player is marked for. If a player keeps landing somewhere they don't want, mark that position for more of the squad; with only two or three kids marked for a position, someone else has to fill it.
+
+**Export CSV** on the Season screen hands off the whole record: one row per player per game (minutes, fair share, difference, minutes available, and minutes in each position), then a season total per player. On a phone it opens the share sheet so you can send it to yourself; on a computer it downloads. If neither works, the text appears on screen to copy into a spreadsheet.
 
 ## Deploy (for whoever hosts it)
 

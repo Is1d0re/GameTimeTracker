@@ -162,13 +162,32 @@
     <p id="season-games" class="muted"></p>
   </div>
   <div class="card">
+    <div class="card-title"><h2>Time by position</h2><span class="muted">whole season</span></div>
+    <p class="hint">Red means a position the player isn't marked for.</p>
+    <div class="scroll-x"><table id="season-pos-table" class="summary pos"></table></div>
+  </div>
+  <div class="card">
     <h2>Games</h2>
     <ul id="game-list" class="roster games"></ul>
   </div>
   <div class="actions">
+    <button class="secondary" id="btn-export">Export CSV</button>
     <button class="link danger" id="btn-season-reset">Reset season</button>
   </div>
 </section>
+
+<!-- ============ CSV FALLBACK ============ -->
+<div id="csv-modal" class="modal" hidden>
+  <div class="modal-box">
+    <h2>Season data</h2>
+    <p class="hint">Copy this and paste it into a spreadsheet.</p>
+    <textarea id="csv-text" readonly rows="10"></textarea>
+    <div class="actions">
+      <button class="secondary" id="btn-csv-copy">Copy</button>
+      <button class="primary" id="btn-csv-close">Done</button>
+    </div>
+  </div>
+</div>
 
 <!-- ============ GAME DETAIL ============ -->
 <section id="view-gamedetail" class="view" hidden>

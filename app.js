@@ -1439,9 +1439,25 @@ function renderSeason() {
   const seasonPos = seasonPosMinsAll();
   const rows = state.roster.map(p => ({ p, d: state.carryOver[p.id] || 0 })).sort((a, c) => a.d - c.d);
   $('season-table').innerHTML = '<tr><th>Player</th><th>Games</th><th>Avg min</th><th>vs. fair</th></tr>' + rows.map(({ p, d }) =>
-    '<tr><td>' + esc(p.name) + posLineHtml(seasonPos[p.id], p.prefs) + '</td><td>' + (played[p.id] || 0) + '</td>' +
+    '<tr><td>' + esc(p.name) + '</td><td>' + (played[p.id] || 0) + '</td>' +
     '<td>' + (played[p.id] ? fmtMin(totalMin[p.id] / played[p.id]) : '—') + '</td>' +
     '<td class="' + signCls(d) + '">' + signed(d) + '</td></tr>').join('');
+
+  // Time by position: a column per position, red where it is not one the player is marked for
+  const byPos = state.roster.map(p => {
+    const pm = seasonPos[p.id] || {};
+    const total = POS.reduce((a, P) => a + (pm[P.id] || 0), 0);
+    return { p, pm, total };
+  }).sort((a, c) => c.total - a.total);
+  $('season-pos-table').innerHTML =
+    '<tr><th>Player</th>' + POS.map(P => '<th>' + esc(P.label) + '</th>').join('') + '<th>Total</th></tr>' +
+    byPos.map(({ p, pm, total }) =>
+      '<tr><td>' + esc(p.name) + '</td>' + POS.map(P => {
+        const m = pm[P.id] || 0;
+        const off = m > 0.05 && p.prefs.length && !p.prefs.includes(P.id);
+        return '<td class="' + (off ? 'neg' : m > 0.05 ? '' : 'zero') + '">' + (m > 0.05 ? fmtMin(m) : '—') + '</td>';
+      }).join('') + '<td class="total">' + (total > 0.05 ? fmtMin(total) : '—') + '</td></tr>').join('');
+  $('btn-export').disabled = !games.length;
   $('season-games').textContent = games.length + ' game' + (games.length === 1 ? '' : 's') + ' saved';
   $('game-list').innerHTML = games.length ? [...games].reverse().map((h, i) => {
     const vals = Object.values(h.minutes);
@@ -1450,6 +1466,72 @@ function renderSeason() {
     return '<li data-game="' + esc(h.id || String(games.length - 1 - i)) + '"><span class="name">Game ' + n + ' · ' + esc(h.date) + '</span>' +
       '<span class="muted">' + Object.keys(h.minutes).length + ' players, ' + (h.subsPerHalf || '?') + ' subs per half, gap ' + fmtClock(spread) + '</span><span class="chev">›</span></li>';
   }).join('') : '<li class="muted">No games saved yet.</li>';
+}
+
+// ---------- CSV export ----------
+const csvCell = v => {
+  const t = String(v == null ? '' : v);
+  return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+};
+const csvMin = m => (Math.round((m || 0) * 100) / 100).toFixed(2);
+
+// One row per player per game, then a season total per player. Minutes are decimal so
+// they add up in a spreadsheet.
+function seasonCsv() {
+  const head = ['Game', 'Date', 'Player', 'Minutes', 'Fair share', 'Difference', 'Available']
+    .concat(POS.map(P => P.label));
+  const rows = [head];
+  state.history.forEach((h, i) => {
+    const ids = h.players || Object.keys(h.minutes);
+    ids.forEach(id => {
+      const pm = (h.posMinutes || {})[id] || {};
+      const name = (h.names || {})[id] || nameOf(id);
+      rows.push([i + 1, h.date, name, csvMin(h.minutes[id]), csvMin((h.shares || {})[id]),
+        csvMin(h.minutes[id] - ((h.shares || {})[id] || 0)), csvMin((h.avail || {})[id])]
+        .concat(POS.map(P => csvMin(pm[P.id] || 0))));
+    });
+  });
+  const seasonPos = seasonPosMinsAll();
+  state.roster.forEach(p => {
+    let mins = 0, fair = 0, avail = 0, games = 0;
+    state.history.forEach(h => {
+      if (h.minutes[p.id] == null) return;
+      games++; mins += h.minutes[p.id]; fair += (h.shares || {})[p.id] || 0; avail += (h.avail || {})[p.id] || 0;
+    });
+    if (!games) return;
+    rows.push(['Season total', games + ' games', p.name, csvMin(mins), csvMin(fair), csvMin(mins - fair), csvMin(avail)]
+      .concat(POS.map(P => csvMin((seasonPos[p.id] || {})[P.id] || 0))));
+  });
+  return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+
+async function exportSeasonCsv() {
+  if (!state.history.length) return;
+  const csv = seasonCsv();
+  const name = 'game-time-season-' + new Date().toISOString().slice(0, 10) + '.csv';
+  // Phones do best with the share sheet; fall back to a download, then to copy-and-paste
+  try {
+    const file = new File([csv], name, { type: 'text/csv' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: 'Season data' });
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+  }
+  try {
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    return;
+  } catch (e) { /* fall through */ }
+  showCsvText(csv);
+}
+function showCsvText(csv) {
+  $('csv-text').value = csv;
+  $('csv-modal').hidden = false;
 }
 
 // Season position totals for everyone on the roster
@@ -1591,6 +1673,15 @@ $('btn-gd-delete').addEventListener('click', () => {
     recomputeCarryOver(); save(); renderSeason(); show('season');
   }
 });
+$('btn-export').addEventListener('click', exportSeasonCsv);
+$('btn-csv-copy').addEventListener('click', async () => {
+  const ta = $('csv-text');
+  ta.select();
+  try { await navigator.clipboard.writeText(ta.value); $('btn-csv-copy').textContent = 'Copied'; }
+  catch (e) { document.execCommand && document.execCommand('copy'); $('btn-csv-copy').textContent = 'Copied'; }
+  setTimeout(() => { $('btn-csv-copy').textContent = 'Copy'; }, 2000);
+});
+$('btn-csv-close').addEventListener('click', () => { $('csv-modal').hidden = true; });
 $('btn-season-reset').addEventListener('click', () => {
   if (confirm('Clear all saved games and carry-over?')) { state.carryOver = {}; state.history = []; save(); renderSeason(); }
 });

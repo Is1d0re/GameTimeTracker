@@ -279,6 +279,12 @@ table.summary td, table.summary th { padding: 9px 4px; border-bottom: 1px solid 
 table.summary th { font: 700 14px/1 var(--display); letter-spacing: .04em; color: var(--ink-soft); }
 table.summary td:nth-child(n+2), table.summary th:nth-child(n+2) { text-align: right; font-variant-numeric: tabular-nums; }
 table.summary .neg { color: var(--off); font-weight: 700; }
+table.summary.pos { font-size: 15px; white-space: nowrap; min-width: 100%; }
+table.summary.pos th, table.summary.pos td { padding: 8px 6px; }
+table.summary.pos td:first-child, table.summary.pos th:first-child { position: sticky; left: 0; background: var(--paper); text-align: left; }
+table.summary.pos .zero { color: var(--line); }
+table.summary.pos .total { font-weight: 700; }
+#csv-text { width: 100%; font: 400 12px/1.4 ui-monospace, Menlo, Consolas, monospace; border: 2px solid var(--line); border-radius: var(--radius); padding: 8px; resize: vertical; }
 table.summary .pos { color: var(--on); font-weight: 700; }
 
 /* ---- modal ---- */
