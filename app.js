@@ -1321,6 +1321,17 @@ function renderGame() {
   $('btn-edit-mode').classList.toggle('primary', editing);
   $('btn-edit-mode').classList.toggle('secondary', !editing);
   $('btn-suggest').disabled = benchIds.length === 0 || editing;
+  const late = editing ? [] : unplannedAvailable();
+  const lateEl = $('arrival-note');
+  if (late.length) {
+    setHtml(lateEl, '<div class="board-strip"><span>Not in the plan</span><span class="muted">' +
+      esc(late.map(nameOf).join(', ')) + '</span></div>' +
+      '<div class="board-actions"><button class="primary" id="btn-work-in-2">Work into the plan</button>' +
+      '<span class="muted">or sub them on with Edit lineup</span></div>');
+    lateEl.hidden = false;
+  } else {
+    lateEl.hidden = true;
+  }
   $('game-hint').textContent = editing
     ? 'Tap a position, then a bench player to put them there. Tap two positions to swap.'
     : 'Tap Edit lineup to change positions or make an unplanned sub.';
@@ -1430,6 +1441,17 @@ function renderModal() {
       '<span class="muted">' + status + '</span>';
     ul.appendChild(li);
   });
+  const late = unplannedAvailable();
+  const note = $('modal-note');
+  if (late.length) {
+    note.innerHTML = '<p class="hint">' + esc(late.map(nameOf).join(', ')) +
+      (late.length === 1 ? ' is' : ' are') + ' available but not in the rest of the plan.</p>' +
+      '<button class="secondary" id="btn-work-in">Work into the plan</button>' +
+      '<p class="hint">Or leave the plan alone and bring them on with Edit lineup.</p>';
+    note.hidden = false;
+  } else {
+    note.hidden = true;
+  }
 }
 function toggleMidGame(id) {
   const g = state.game, p = byId(id);
@@ -1450,6 +1472,40 @@ function toggleMidGame(id) {
   save();
   renderModal();
   renderGame();
+}
+
+// Available players who appear nowhere in the rest of the plan — a late arrival will sit
+// on the bench all game unless the coach works them in.
+function unplannedAvailable() {
+  const g = state.game;
+  if (!g || !g.followPlan || g.phase === 'done') return [];
+  const b = currentBlock(g);
+  const rest = (g.plan || []).filter(x => x.index > b);
+  if (!rest.length) return [];
+  const used = new Set();
+  rest.forEach(x => Object.values(x.slots || {}).forEach(id => used.add(id)));
+  return presentIds().filter(id => g.players[id] && !used.has(id) && !g.players[id].onField);
+}
+
+// Rebuild every block after the current one from the minutes actually played, so anyone
+// available gets worked into the rotation.
+function replanRemaining() {
+  const g = state.game;
+  if (!g) return;
+  const S = g.subsPerHalf, b = currentBlock(g);
+  const ids = presentIds().filter(id => g.players[id]);
+  const plan = planFrom({
+    ids, S, minutes: currentMinutes(), fromBlock: b + 1,
+    onField: ids.filter(id => g.players[id].onField), gk: g.gk,
+    h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
+    gkEligible: gkEligibleSet(), prefsOf, posMins: livePosMins(ids), prevSlots: g.slots,
+  });
+  g.plan = (g.plan || []).filter(x => x.index <= b)
+    .concat(plan.blocks.map(x => ({ index: x.index, slots: Object.assign({}, x.slots) })));
+  g.arrival = null;
+  g.pending = null;
+  g.nextOverride = null;
+  save();
 }
 
 // ---------- Positions ----------
@@ -1968,6 +2024,12 @@ $('modal-close').addEventListener('click', () => { $('modal').hidden = true; });
 $('modal-list').addEventListener('click', e => {
   const t = e.target.closest('[data-act]');
   if (t) toggleMidGame(t.dataset.id);
+});
+$('modal-note').addEventListener('click', e => {
+  if (e.target.id === 'btn-work-in') { replanRemaining(); renderModal(); renderGame(); }
+});
+$('arrival-note').addEventListener('click', e => {
+  if (e.target.id === 'btn-work-in-2') { replanRemaining(); renderGame(); }
 });
 $('banner-apply').addEventListener('click', () => { applyPending(); renderGame(); });
 $('banner-dismiss').addEventListener('click', () => { state.game.pending = null; save(); renderGame(); });

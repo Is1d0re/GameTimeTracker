@@ -40,7 +40,7 @@ The home screen is just your game plans. Everything about a game — the squad, 
 3. Tap **Start** when the ref blows. **Water break** stops the clock and says so; **Resume** restarts it. At halftime you get **Start 2nd half**, or **Play on** if the ref hasn't blown yet. The clock runs straight through — the second half starts at 25:00 — and keeps going past 50:00 until you tap **End game**.
 4. When the phone buzzes, the board shows one row per swap: who comes off, the position, who goes on. Tap **Apply** once the kids have swapped.
 5. To change the lineup, tap **Edit lineup** and set the field the way you want it, then **Sub now** for an unplanned change or **Save for 31:15** to hold it for the next whistle. Outside edit mode, tapping does nothing, so a stray tap can't disturb the lineup.
-6. **Attendance** on the clock handles a late arrival or an injury mid-game.
+6. **Attendance** on the clock handles a late arrival or an injury mid-game. If someone turns up after kickoff, the app says they're not in the rest of the plan and offers **Work into the plan** — that rebuilds every remaining block from the minutes actually played so far, so they get a fair share of what's left. Blocks already played are untouched. Decline it and the plan stands; bring them on yourself with **Edit lineup** whenever you want.
 7. When the ref blows, tap **End game**, then review the summary and tap **Save to season** so the next plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share.
 
 Minutes in each position appear under every player's name on the game summary, and the **Season** screen has a **Time by position** table for the whole season — a column per position, red where it isn't one the player is marked for.

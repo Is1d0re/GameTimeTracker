@@ -218,8 +218,8 @@ table.plan th.now { color: var(--pitch-deep); }
 .board.now .board-strip { background: var(--keeper); color: #000; }
 .board.now .board-strip .muted { color: rgba(0,0,0,.6); }
 .board-actions { display: flex; gap: 8px; padding: 10px 12px; background: var(--paper); border-top: 1px solid var(--line); }
-.board-actions .primary { flex: 1; font-family: var(--display); font-size: 20px; font-weight: 800; }
-.board-actions .muted { flex: 1 1 120px; font-size: 14px; }
+.board-actions .primary { flex: 2 1 auto; font-family: var(--display); font-size: 20px; font-weight: 800; white-space: nowrap; }
+.board-actions .muted { flex: 1 1 100px; font-size: 14px; }
 .board.editing .board-actions { background: var(--paper); }
 .board.quiet { border-color: var(--line); background: var(--paper); }
 .board.quiet .board-strip { color: var(--ink); }
@@ -312,6 +312,8 @@ table.summary .pos { color: var(--on); font-weight: 700; }
 .modal { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
 .modal-box { background: var(--paper); width: 100%; max-width: 640px; max-height: 85vh; overflow-y: auto; border-radius: 12px 12px 0 0; padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px); }
 .modal-box .primary { width: 100%; margin-top: 12px; }
+#modal-note { border-top: 1px solid var(--line); margin-top: 10px; padding-top: 6px; }
+#modal-note .secondary { width: 100%; }
 
 @media (max-width: 380px) {
   #clock-time { font-size: 60px; }
