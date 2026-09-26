@@ -440,14 +440,14 @@ function playOn() {
 }
 
 // Append the current lineup to the game log (skipped if unchanged from the last entry)
-function logLineup() {
+function logLineup(offPlan) {
   const g = state.game;
   if (!g) return;
   const on = Object.keys(g.players).filter(id => g.players[id].onField).sort();
   const last = g.log[g.log.length - 1];
   const slots = Object.assign({}, g.slots);
   if (last && last.gk === g.gk && last.on.join() === on.join()) { if (last) last.slots = slots; return; }
-  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, on, gk: g.gk, slots });
+  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, on, gk: g.gk, slots, offPlan: !!offPlan });
 }
 
 function elapsedMs() {
@@ -726,27 +726,13 @@ function applyPending() {
   if (p.gk) g.gk = p.gk;
   if (g.phase === 'h1' && g.gk) g.h1gk = g.gk;
   const desired = p.slots;
+  const offPlan = p.title === 'Sub now';
   g.pending = null; g.selected = null;
   resyncSlots(desired);
-  logLineup();
+  logLineup(offPlan);
   save();
 }
 
-function adHocSuggestion() {
-  const g = state.game;
-  const ids = presentIds().filter(id => g.players[id]);
-  const bench = ids.filter(id => !g.players[id].onField).sort((a, c) => playedMin(a) - playedMin(c));
-  const field = ids.filter(id => g.players[id].onField && id !== g.gk).sort((a, c) => playedMin(c) - playedMin(a));
-  if (!bench.length) return { title: 'No subs available', off: [], on: [], gk: null, note: 'Everyone here is already on the field.' };
-  if (!field.length) return null;
-  const inId = bench[0], outId = field[0];
-  if (playedMin(inId) >= playedMin(outId) - 0.25) {
-    return { title: 'Already balanced', off: [], on: [], gk: null, note: 'The bench has as many minutes as the field. Wait for the next scheduled sub.' };
-  }
-  const after = ids.filter(id => g.players[id].onField && id !== outId).concat(inId);
-  const slots = assignSlots({ on: after, gk: g.gk, prefsOf, posMins: livePosMins(ids), prev: g.slots });
-  return { title: 'Suggested sub', off: [outId], on: [inId], gk: null, slots };
-}
 
 function endGame() {
   const g = state.game;
@@ -859,11 +845,13 @@ function pitchHtml(slots, opts) {
       id && o.incoming && o.incoming.includes(id) ? 'incoming' : '',
       id && o.outgoing && o.outgoing.includes(id) ? 'outgoing' : ''].filter(Boolean).join(' ');
     const sub = id ? (o.sub ? o.sub(id) : '') : 'empty';
+    const nt = id && o.note ? o.note(id) : '';
     return '<button class="' + cls + '" style="left:' + sl.x + '%;top:' + sl.y + '%" data-slot="' + sl.id + '"' +
       (o.disabled ? ' disabled' : '') + '>' +
       '<span class="pos">' + esc(sl.label) + '</span>' +
       '<span class="who">' + (id ? esc(nameOf(id)) : '—') + '</span>' +
-      (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</button>';
+      (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') +
+      '<span class="note">' + esc(nt) + '</span></button>';
   }).join('');
   const benchIds = (o.bench || []).filter(id => !taken.includes(id));
   const bench = benchIds.map(id => {
@@ -875,7 +863,8 @@ function pitchHtml(slots, opts) {
       ' data-bench="' + id + '"' + (o.disabled ? ' disabled' : '') + '>' +
       '<span class="who">' + esc(nameOf(id)) + '</span>' +
       '<span class="bpos' + (prefs.length ? '' : ' any') + '">' + esc(plays) + '</span>' +
-      (o.sub ? '<span class="sub">' + esc(o.sub(id)) + '</span>' : '') + '</button>';
+      (o.sub ? '<span class="sub">' + esc(o.sub(id)) + '</span>' : '') +
+      '<span class="note">' + esc(o.note ? o.note(id) : '') + '</span></button>';
   }).join('');
   return '<div class="pitch">' + chips + '</div>' +
     '<div class="benchbar"><span class="blabel">Bench ' + benchIds.length + '</span>' +
@@ -894,15 +883,17 @@ function paintPitch(el, slots, opts) {
   ].join('|');
   if (el.dataset.pkey === key) {
     if (!o.sub) return;
+    const put = (b, id) => {
+      const sp = b.querySelector('.sub');
+      if (sp && o.sub) { const t = o.sub(id); if (sp.textContent !== t) sp.textContent = t; }
+      const np = b.querySelector('.note');
+      if (np) { const t = o.note ? o.note(id) : ''; if (np.textContent !== t) np.textContent = t; }
+    };
     el.querySelectorAll('[data-slot]').forEach(b => {
       const id = (slots || {})[b.dataset.slot];
-      const sp = b.querySelector('.sub');
-      if (id && sp) { const t = o.sub(id); if (sp.textContent !== t) sp.textContent = t; }
+      if (id) put(b, id);
     });
-    el.querySelectorAll('[data-bench]').forEach(b => {
-      const sp = b.querySelector('.sub');
-      if (sp) { const t = o.sub(b.dataset.bench); if (sp.textContent !== t) sp.textContent = t; }
-    });
+    el.querySelectorAll('[data-bench]').forEach(b => put(b, b.dataset.bench));
     return;
   }
   el.dataset.pkey = key;
@@ -985,16 +976,18 @@ function blockLabel(b, S) {
   return { at: b.start, when: b.index === S + 1 ? 'Halftime' : atClock(b.start) };
 }
 function planGridHtml(ids, blocks, S, totals, currentIndex) {
+  const flagged = blocks.some(b => b.now);
+  const isNow = b => (flagged ? !!b.now : b.index === currentIndex);
   let html = '<tr><th></th>';
   blocks.forEach(b => {
-    html += '<th class="' + (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now' : '') + '">' +
+    html += '<th class="' + (b.index === S + 1 && !b.played ? 'half-start ' : '') + (isNow(b) ? 'now' : '') + '">' +
       atClock(b.start) + (b.index === S + 1 ? ' HT' : isWaterBlock(b.start, S) ? ' 💧' : '') + '</th>';
   });
   html += '<th>Total</th></tr>';
   ids.forEach(id => {
     html += '<tr><td class="player">' + esc(nameOf(id)) + '</td>';
     blocks.forEach(b => {
-      const cls = (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now ' : '') +
+      const cls = (b.index === S + 1 && !b.played ? 'half-start ' : '') + (isNow(b) ? 'now ' : '') +
         (b.gk === id ? 'gk' : b.on.includes(id) ? 'on' : '');
       const sl = slotById(slotOfPlayer(b.slots, id));
       html += '<td class="' + cls + '">' + (b.gk === id ? 'GK' : b.on.includes(id) ? (sl ? esc(sl.label) : '●') : '') + '</td>';
@@ -1105,13 +1098,31 @@ function liveForecast() {
   }
   const ov = g.nextOverride;
   const ovKey = ov ? ov.block + ':' + SLOTS.map(sl => ov.slots[sl.id] || '-').join(',') : '';
-  const key = [b, onField.join(','), gk, ids.join(','), g.h2gk, ovKey, g.followPlan ? 'p' : ''].join('|');
+  const key = [b, onField.join(','), gk, ids.join(','), g.h2gk, ovKey, g.followPlan ? 'p' : '',
+    (g.log || []).length].join('|');
   const seed = seedMinutes(ids);
   const minutes = currentMinutes();
   const remain = Math.max(0, Math.min(blockStart(S, b + 1), GAME_MIN) - min);
   onField.forEach(id => { minutes[id] += remain; });
-  const current = { index: b, half: b <= S ? 1 : 2, start: blockStart(S, b), end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)), slots: g.slots || {} };
-  let blocks = [current], next = null, projected = minutes;
+  const bStart = blockStart(S, b);
+  // Lineups this block has already seen: the one it started with, then any change made
+  // since. Each becomes its own column so an unplanned sub shows up at the time it happened.
+  const offPlan = (g.log || []).filter(e => e.slots && e.offPlan && e.t > bStart + 1e-6);
+  const stages = [];
+  if (offPlan.length) {
+    const before = [...(g.log || [])].reverse().find(e => e.slots && e.t < offPlan[0].t - 1e-6);
+    stages.push({ t: bStart, slots: before ? before.slots : (g.slots || {}) });
+    offPlan.forEach(e => stages.push({ t: e.t, slots: e.slots }));
+  } else {
+    stages.push({ t: bStart, slots: g.slots || {} });
+  }
+  stages[stages.length - 1].slots = g.slots || {};                   // the live lineup is the last word
+  const past = stages.slice(0, -1).map(st => {
+    const on = Object.values(st.slots);
+    return { index: b, half: b <= S ? 1 : 2, start: st.t, end: blockStart(S, b + 1), on, gk: st.slots.GK, bench: ids.filter(id => !on.includes(id)), slots: st.slots, played: true };
+  });
+  const current = { index: b, half: b <= S ? 1 : 2, start: stages[stages.length - 1].t, end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)), slots: g.slots || {}, now: true };
+  let blocks = past.concat([current]), next = null, projected = minutes;
   if (b + 1 < B) {
     const sub = subForBlock(b + 1, ids, onField, gk, minutes);
     next = { block: sub.block, diff: sub.diff, manual: sub.manual, fromPlan: sub.fromPlan };
@@ -1119,7 +1130,7 @@ function liveForecast() {
       // Coach's lineup for the next block, then let the planner take over from there
       const minutes2 = Object.assign({}, minutes);
       sub.block.on.forEach(id => { minutes2[id] += blockLen(S); });
-      blocks = [current, sub.block];
+      blocks = past.concat([current, sub.block]);
       projected = minutes2;
       if (b + 2 < B) {
         const rest = planFrom({
@@ -1131,7 +1142,7 @@ function liveForecast() {
         projected = rest.projected;
       }
     } else {
-      blocks = [current, ...sub.plan.blocks];
+      blocks = past.concat([current], sub.plan.blocks);
       projected = sub.plan.projected;
     }
   }
@@ -1303,28 +1314,29 @@ function renderGame() {
   const outgoing = editing ? ids.filter(id => g.players[id].onField && !Object.values(shown).includes(id))
     : [...nextOff];
   const nextSlots = (g.pending && g.pending.slots) || (next && next.block.slots) || {};
-  const sub = id => {
+  const sub = id => fmtMin(mins[id]);
+  // What is about to happen to this player, shown under their running clock
+  const note = id => {
     if (editing) {
       const here = slotOfPlayer(shown, id);
-      if (!here) return g.players[id].onField ? 'coming off' : fmtMin(mins[id]);
-      return g.players[id].onField ? fmtMin(mins[id]) : 'coming on';
+      if (!here) return g.players[id].onField ? 'coming off' : '';
+      return g.players[id].onField ? '' : 'coming on';
     }
     const to = slotById(slotOfPlayer(nextSlots, id));
-    if (nextOn.has(id) && to) return '→ ' + to.label;
+    if (nextOn.has(id)) return to ? '→ ' + to.label : 'on next';
     if (nextOff.has(id)) return 'off next';
-    return fmtMin(mins[id]);
+    return '';
   };
   const benchIds = ids.filter(id => !Object.values(shown).includes(id));
   paintPitch($('pitch-wrap'), shown, {
     bench: benchIds, selected: editing ? g.editSel : null, behind, incoming, outgoing,
-    sub, disabled: !editing && g.phase === 'done',
+    sub, note, disabled: !editing && g.phase === 'done',
   });
 
   $('btn-edit-mode').hidden = !canEdit;
   $('btn-edit-mode').textContent = editing ? 'Done editing' : 'Edit lineup';
   $('btn-edit-mode').classList.toggle('primary', editing);
   $('btn-edit-mode').classList.toggle('secondary', !editing);
-  $('btn-suggest').disabled = benchIds.length === 0 || editing;
   const late = editing ? [] : unplannedAvailable();
   const lateEl = $('arrival-note');
   if (late.length) {
@@ -1472,7 +1484,7 @@ function toggleMidGame(id) {
   }
   g.pending = null;
   resyncSlots();
-  logLineup();
+  logLineup(true);
   save();
   renderModal();
   renderGame();
@@ -2060,7 +2072,6 @@ $('btn-live-plan').addEventListener('click', () => {
   $('btn-live-plan').textContent = card.hidden ? 'Show plan' : 'Hide plan';
   renderGame();
 });
-$('btn-suggest').addEventListener('click', () => { state.game.pending = adHocSuggestion(); save(); renderGame(); });
 $('pitch-wrap').addEventListener('click', e => {
   const spot = e.target.closest('[data-slot]');
   if (spot) { onPitchTap('slot', spot.dataset.slot); return; }

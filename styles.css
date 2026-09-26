@@ -173,8 +173,9 @@ table.plan td.player { text-align: left; font-weight: 600; position: sticky; lef
 table.plan td.on { background: var(--on-tint); color: var(--pitch-deep); font-weight: 700; }
 table.plan td.gk { background: var(--keeper-tint); color: #5a4400; font: 700 12px/1 var(--display); }
 table.plan td.total { font-weight: 700; font-variant-numeric: tabular-nums; }
-table.plan th.now, table.plan td.now { background: var(--pitch-tint); }
-table.plan th.now { color: var(--pitch-deep); }
+table.plan th.now, table.plan td.now { border-left: 2px dashed var(--keeper); border-right: 2px dashed var(--keeper); }
+table.plan th.now { border-top: 2px dashed var(--keeper); color: var(--ink); font-weight: 800; }
+table.plan tr:last-child td.now { border-bottom: 2px dashed var(--keeper); }
 .swaps { padding-left: 20px; margin: 10px 0 0; font-size: 15px; }
 .swaps li { margin: 6px 0; }
 .swaps b { color: var(--pitch-deep); }
@@ -269,9 +270,12 @@ button:disabled.done { opacity: .75; }
 }
 .spot .pos { font: 700 10px/1 var(--display); letter-spacing: .06em; color: var(--ink-soft); }
 .spot .who { font: 700 16px/1.05 var(--display); text-align: center; overflow-wrap: anywhere; }
-.spot .sub { font: 600 11px/1 var(--text); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.spot .sub { font: 700 13px/1 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
+.spot .note:not(:empty) { font: 700 10px/1.1 var(--display); letter-spacing: .04em; margin-top: 1px; }
+.spot.outgoing .note { color: var(--off); }
+.spot.incoming .note { color: var(--on); }
 .spot.gk { background: var(--keeper); border-color: var(--keeper); }
-.spot.gk .pos, .spot.gk .sub { color: #5a4400; }
+.spot.gk .pos { color: #5a4400; }
 .spot.empty { background: rgba(255,255,255,.14); border-style: dashed; border-color: rgba(255,255,255,.7); color: #fff; box-shadow: none; }
 .spot.empty .pos, .spot.empty .sub { color: rgba(255,255,255,.8); }
 .spot.behind { border-color: var(--off); }
@@ -290,7 +294,8 @@ button:disabled.done { opacity: .75; }
 .bchip .who { font: 700 15px/1.05 var(--display); }
 .bchip .bpos { font: 700 10px/1 var(--display); letter-spacing: .06em; color: var(--pitch-deep); background: var(--pitch-tint); border-radius: 3px; padding: 3px 5px; }
 .bchip .bpos.any { background: transparent; color: var(--ink-soft); font-family: var(--text); font-weight: 500; letter-spacing: 0; }
-.bchip .sub { font: 600 11px/1 var(--text); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.bchip .sub { font: 700 14px/1 var(--display); color: var(--ink); font-variant-numeric: tabular-nums; }
+.bchip .note:not(:empty) { font: 700 10px/1.1 var(--display); letter-spacing: .04em; color: var(--on); margin-top: 1px; }
 .bchip.behind { border-color: var(--off); }
 .bchip.behind .sub { color: var(--off); }
 .bchip.incoming { border-color: var(--on); background: var(--on-tint); }
