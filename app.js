@@ -866,13 +866,17 @@ function pitchHtml(slots, opts) {
       (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</button>';
   }).join('');
   const benchIds = (o.bench || []).filter(id => !taken.includes(id));
-  const bench = benchIds.map(id =>
-    '<button class="bchip' + (o.selected === 'bench:' + id ? ' sel' : '') +
+  const bench = benchIds.map(id => {
+    const prefs = prefsOf(id);
+    const plays = prefs.length ? prefs.map(posLabel).join(' ') : 'any';
+    return '<button class="bchip' + (o.selected === 'bench:' + id ? ' sel' : '') +
       (o.behind && o.behind[id] ? ' behind' : '') +
       (o.incoming && o.incoming.includes(id) ? ' incoming' : '') + '"' +
       ' data-bench="' + id + '"' + (o.disabled ? ' disabled' : '') + '>' +
       '<span class="who">' + esc(nameOf(id)) + '</span>' +
-      (o.sub ? '<span class="sub">' + esc(o.sub(id)) + '</span>' : '') + '</button>').join('');
+      '<span class="bpos' + (prefs.length ? '' : ' any') + '">' + esc(plays) + '</span>' +
+      (o.sub ? '<span class="sub">' + esc(o.sub(id)) + '</span>' : '') + '</button>';
+  }).join('');
   return '<div class="pitch">' + chips + '</div>' +
     '<div class="benchbar"><span class="blabel">Bench ' + benchIds.length + '</span>' +
     (bench || '<span class="bnone">nobody</span>') + '</div>';
@@ -885,7 +889,7 @@ function paintPitch(el, slots, opts) {
   const o = opts || {};
   const key = [
     SLOTS.map(sl => sl.id + '=' + ((slots || {})[sl.id] || '')).join(','),
-    (o.bench || []).join(','), o.selected || '', o.disabled ? 'd' : '',
+    (o.bench || []).map(id => id + ':' + prefsOf(id).join('')).join(','), o.selected || '', o.disabled ? 'd' : '',
     Object.keys(o.behind || {}).join(','), (o.incoming || []).join(','), (o.outgoing || []).join(','),
   ].join('|');
   if (el.dataset.pkey === key) {

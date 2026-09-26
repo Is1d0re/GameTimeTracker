@@ -283,11 +283,13 @@ button:disabled.done { opacity: .75; }
 .blabel { flex: 0 0 auto; align-self: center; font: 700 12px/1.1 var(--display); letter-spacing: .06em; color: var(--ink-soft); width: 42px; }
 .bnone { align-self: center; color: var(--ink-soft); font-size: 14px; }
 .bchip {
-  flex: 0 0 auto; min-width: 84px; min-height: 52px; padding: 6px 8px;
+  flex: 0 0 auto; min-width: 88px; min-height: 52px; padding: 6px 8px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
   background: var(--paper); border: 2px solid var(--line); border-radius: 8px; color: var(--ink);
 }
 .bchip .who { font: 700 15px/1.05 var(--display); }
+.bchip .bpos { font: 700 10px/1 var(--display); letter-spacing: .06em; color: var(--pitch-deep); background: var(--pitch-tint); border-radius: 3px; padding: 3px 5px; }
+.bchip .bpos.any { background: transparent; color: var(--ink-soft); font-family: var(--text); font-weight: 500; letter-spacing: 0; }
 .bchip .sub { font: 600 11px/1 var(--text); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
 .bchip.behind { border-color: var(--off); }
 .bchip.behind .sub { color: var(--off); }
