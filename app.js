@@ -1590,6 +1590,7 @@ function autoFillFrom(from) {
     gkEligible: gkEligibleSet(), prefsOf, posMins: pm, prevSlots: last.slots,
   });
   d.blocks = kept.concat(rest.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })));
+  d.filled = from;          // which block the rest was filled from
   save();
 }
 
@@ -1630,6 +1631,14 @@ function renderPlanner() {
   $('planner-mins').innerHTML = '<tr><th>Player</th><th>Minutes</th></tr>' + sorted.map(id =>
     '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
   $('btn-planner-delete').hidden = !d.id;
+  // The check stays until the plan is edited again
+  const fill = $('btn-planner-fill');
+  const done = d.filled != null;
+  fill.classList.toggle('done', done);
+  fill.innerHTML = done
+    ? '<span class="tick">✓</span> Filled from ' + atClock(d.filled * blockLen(S))
+    : 'Auto-fill later blocks';
+  fill.disabled = d.block >= d.blocks.length - 1;
 }
 
 // Changing subs per half changes the block boundaries, so the plan is rebuilt around the
@@ -1641,7 +1650,7 @@ function setDraftSubs(S) {
   const first = d.blocks[0] ? Object.values(d.blocks[0].slots).filter(id => ids.includes(id)) : [];
   const gk0 = d.blocks[0] && ids.includes(d.blocks[0].slots.GK) ? d.blocks[0].slots.GK : null;
   d.subsPerHalf = S;
-  d.block = 0; d.sel = null;
+  d.block = 0; d.sel = null; d.filled = null;
   const plan = planFrom(Object.assign(kickoffPlanInputs(), { S, starters: first, h1gk: gk0 }));
   d.blocks = plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
   save();
@@ -1969,6 +1978,7 @@ $('planner-pitch').addEventListener('click', e => {
   if (spot) d.sel = slotTap(cur.slots, d.sel, spot.dataset.slot);
   else if (chip) d.sel = benchTap(cur.slots, d.sel, chip.dataset.bench);
   else return;
+  d.filled = null;
   save(); renderPlanner();
 });
 $('psubs-minus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf - 1); renderPlanner(); });

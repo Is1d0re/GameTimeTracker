@@ -230,8 +230,15 @@ table.plan th.now { color: var(--pitch-deep); }
 .tab { flex: 0 0 auto; min-height: 40px; padding: 0 12px; font: 700 14px/1 var(--display); letter-spacing: .03em;
   background: var(--paper); border: 2px solid var(--line); color: var(--ink-soft); border-radius: 6px; white-space: nowrap; }
 .tab.on { background: var(--pitch); border-color: var(--pitch); color: #fff; }
-.tab.half { margin-left: 10px; box-shadow: -8px 0 0 -6px var(--ink-soft); }
+.tab.half { margin-left: 14px; position: relative; }
+.tab.half::before {
+  content: ''; position: absolute; left: -11px; top: 3px; bottom: 3px;
+  width: 2px; border-radius: 1px; background: var(--ink-soft);
+}
 .roster.games li.on .name { color: var(--pitch-deep); }
+button.done { border-color: var(--on); color: var(--on); }
+button.done .tick { font-weight: 800; margin-right: 2px; }
+button:disabled.done { opacity: .75; }
 
 /* ---- the pitch ---- */
 .pitch-wrap { margin-bottom: 8px; }
