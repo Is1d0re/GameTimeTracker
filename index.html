@@ -19,7 +19,7 @@
 </head>
 <body>
 
-<!-- ============ SETUP ============ -->
+<!-- ============ HOME ============ -->
 <section id="view-setup" class="view">
   <header class="bar">
     <h1>Game Time</h1>
@@ -27,70 +27,16 @@
   </header>
 
   <div class="card">
-    <div class="card-title">
-      <h2>Roster</h2>
-      <span id="attendance-summary" class="muted"></span>
-    </div>
-    <p class="hint">Tap a name to mark who's here today. Tap ✎ to change a player's positions or rename them.</p>
-    <ul id="roster" class="roster"></ul>
-    <p id="gk-hint" class="hint"></p>
-  </div>
-
-  <div class="card">
-    <div class="card-title"><h2>Game plan</h2><span id="plan-active" class="muted"></span></div>
-    <p class="hint">Optional. A saved plan sets who plays which position in every block, and drives the sub alerts on game day.</p>
-    <p id="plan-fit" class="hint"></p>
+    <div class="card-title"><h2>Game plans</h2><span id="plan-active" class="muted"></span></div>
+    <p class="hint">A plan holds your squad, who's available, and who plays which position in every block. Tap one to use it today, or the arrow to open it.</p>
     <ul id="plan-list" class="roster games"></ul>
+    <p id="plan-fit" class="hint"></p>
     <div class="actions tight">
       <button class="secondary" id="btn-plan-new">New plan</button>
-      <button class="link" id="btn-plan-clear">Use auto</button>
     </div>
-  </div>
-
-  <div class="card" id="starters-card" hidden>
-    <div class="card-title">
-      <h2>Starters</h2>
-      <span id="starters-summary" class="muted"></span>
-    </div>
-    <p class="hint">Optional. Tap up to 7 players to start on the field; the plan fills in the rest.</p>
-    <p id="starters-note" class="hint"></p>
-    <div class="actions tight">
-      <button class="secondary" id="btn-starters-suggest">Suggest starters</button>
-      <button class="link" id="btn-starters-clear">Clear</button>
-    </div>
-    <div id="starters" class="chips"></div>
-    <div class="row">
-      <label for="start-gk" class="label">Starting keeper</label>
-      <select id="start-gk"></select>
-    </div>
-  </div>
-
-  <div class="card" id="subs-card">
-    <h2>Subs per half</h2>
-    <div class="stepper">
-      <button id="subs-minus" aria-label="Fewer subs">−</button>
-      <span id="subs-value">3</span>
-      <button id="subs-plus" aria-label="More subs">+</button>
-    </div>
-    <p id="subs-schedule" class="hint"></p>
-    <p id="subs-fairness" class="hint"></p>
-  </div>
-
-  <div class="card">
-    <label class="check"><input type="checkbox" id="use-carry"> Balance against previous games (season carry-over)</label>
-  </div>
-
-  <div class="card" id="plan-card" hidden>
-    <div class="card-title">
-      <h2>Rotation plan</h2>
-      <span id="plan-summary" class="muted"></span>
-    </div>
-    <div class="scroll-x"><table id="plan-grid" class="plan"></table></div>
-    <ol id="plan-swaps" class="swaps"></ol>
   </div>
 
   <div class="actions">
-    <button class="secondary" id="btn-plan">Show plan</button>
     <button class="primary" id="btn-start">Start game</button>
   </div>
   <p id="start-msg" class="hint center"></p>
@@ -104,6 +50,16 @@
     <button class="link" id="btn-planner-rename">Rename</button>
   </header>
   <div class="card">
+    <div class="card-title">
+      <h2>Squad</h2>
+      <span id="attendance-summary" class="muted"></span>
+    </div>
+    <p class="hint">Tap a name to mark who's available. Tap ✎ to change a player's positions or rename them.</p>
+    <ul id="roster" class="roster"></ul>
+    <p id="gk-hint" class="hint"></p>
+  </div>
+
+  <div class="card">
     <h2>Subs per half</h2>
     <div class="stepper">
       <button id="psubs-minus" aria-label="Fewer subs">−</button>
@@ -111,6 +67,8 @@
       <button id="psubs-plus" aria-label="More subs">+</button>
     </div>
     <p id="psubs-schedule" class="hint"></p>
+    <p id="subs-fairness" class="hint"></p>
+    <label class="check"><input type="checkbox" id="use-carry"> Balance against previous games (season carry-over)</label>
   </div>
 
   <div class="card">
@@ -126,6 +84,18 @@
     <div class="card-title"><h2>Projected minutes</h2><span id="planner-gap" class="muted"></span></div>
     <table id="planner-mins" class="summary"></table>
   </div>
+  <div class="actions tight">
+    <button class="secondary" id="btn-plan">Show whole plan</button>
+  </div>
+  <div class="card" id="plan-card" hidden>
+    <div class="card-title">
+      <h2>Whole plan</h2>
+      <span id="plan-summary" class="muted"></span>
+    </div>
+    <div class="scroll-x"><table id="plan-grid" class="plan"></table></div>
+    <ol id="plan-swaps" class="swaps"></ol>
+  </div>
+
   <div class="actions">
     <button class="primary" id="btn-planner-save">Save plan</button>
     <button class="link danger" id="btn-planner-delete">Delete</button>

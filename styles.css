@@ -96,7 +96,13 @@ button.small { min-height: 42px; font-size: 15px; width: 100%; margin-top: 8px; 
 .roster.games li { cursor: pointer; flex-wrap: wrap; padding: 8px 0; }
 .roster.games .name { flex: 1 1 100%; min-height: 0; }
 .roster.games .muted { flex: 1; font-size: 14px; }
-.roster.games .chev { color: var(--pitch); font-size: 24px; padding: 0 6px; }
+.roster.games li { align-items: center; row-gap: 2px; }
+.roster.games .name { flex: 1 1 auto; font-size: 18px; }
+.roster.games .muted { flex: 1 1 100%; order: 3; }
+.roster.games .chev {
+  order: 2; flex: 0 0 auto; background: none; border: 0; color: var(--pitch);
+  font: 400 26px/1 var(--text); min-height: 44px; min-width: 44px; padding: 0;
+}
 
 /* ---- positions ---- */
 .roster li { flex-wrap: wrap; padding-bottom: 4px; }

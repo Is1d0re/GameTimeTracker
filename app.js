@@ -353,14 +353,12 @@ const seedMinutes = ids => {
   return m;
 };
 // Starters/keeper choices only count for players who are present
-const activeStarters = () => state.starters.filter(id => byId(id) && byId(id).present).slice(0, ON_FIELD);
-const activeStartGk = () => (activeStarters().includes(state.startGk) && byId(state.startGk).gk) ? state.startGk : null;
 // Planner inputs for a fresh game from the setup screen
 function kickoffPlanInputs() {
   const ids = presentIds();
   return {
     ids, S: state.subsPerHalf, minutes: seedMinutes(ids),
-    starters: activeStarters(), h1gk: activeStartGk(), gkEligible: gkEligibleSet(),
+    starters: [], h1gk: null, gkEligible: gkEligibleSet(),
     prefsOf, posMins: seasonPosMins(ids),
   };
 }
@@ -784,7 +782,6 @@ function saveToSeason() {
   });
   recomputeCarryOver();
   state.game = null;
-  state.starters = []; state.startGk = null; // starters are a per-game choice
   save();
 }
 
@@ -910,15 +907,29 @@ function paintPitch(el, slots, opts) {
 
 // ---------- Setup ----------
 function renderSetup() {
+  renderPlans();
+  const act = activePlan();
+  const n = presentIds().length;
+  $('btn-start').disabled = !act || n < ON_FIELD;
+  $('start-msg').textContent = !act
+    ? 'Pick a plan to use today, or create one.'
+    : n < ON_FIELD
+      ? 'Only ' + n + ' players available. Open the plan and mark at least ' + ON_FIELD + '.'
+      : '';
+}
+
+// The squad: who is on the team, who is available today, and what they play.
+// Lives in the plan editor, because a plan is built around it.
+function renderSquad() {
   const ids = presentIds();
-  const S = state.subsPerHalf;
   const n = ids.length, subs = Math.max(0, n - ON_FIELD);
-  $('attendance-summary').textContent = n + ' here, ' + subs + ' sub' + (subs === 1 ? '' : 's') +
+  $('attendance-summary').textContent = n + ' available, ' + subs + ' sub' + (subs === 1 ? '' : 's') +
     (n >= ON_FIELD ? ', about ' + fmtMin(fairTarget(n)) + ' each' : '');
   const gkCount = state.roster.filter(p => p.present && p.prefs.includes('GK')).length;
   const noPos = state.roster.filter(p => p.present && !p.prefs.length).map(p => p.name);
-  $('gk-hint').textContent = (gkCount === 0 ? 'No keepers listed, so anyone here may be put in goal. ' :
-    gkCount === 1 ? 'Only one keeper listed. They will be in goal all game. ' : '') +
+  $('gk-hint').textContent = (n < ON_FIELD ? 'Mark at least ' + ON_FIELD + ' players available. ' : '') +
+    (gkCount === 0 ? 'No keepers listed, so anyone available may be put in goal. ' :
+     gkCount === 1 ? 'Only one keeper listed. They will be in goal all game. ' : '') +
     (noPos.length ? 'No positions listed for ' + noPos.join(', ') + ', so they can be played anywhere.' : '');
 
   const ul = $('roster');
@@ -941,38 +952,7 @@ function renderSetup() {
         '<button class="tag rename" data-act="rename" data-id="' + p.id + '">Rename</button></span>' : '');
     ul.appendChild(li);
   });
-
-  $('subs-value').textContent = S;
-  $('subs-minus').disabled = S <= MIN_SUBS;
-  $('subs-plus').disabled = S >= MAX_SUBS;
-  const all = [];
-  for (let i = 1; i < blockCount(S); i++) all.push(blockStart(S, i));
-  $('subs-schedule').textContent = 'Subs at ' + all.map(t =>
-    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t) + (isWaterBlock(t, S) ? ' (water)' : '')).join(', ') +
-    '. Shifts of ' + fmtClock(blockLen(S)) + '.';
-  renderPlans();
-  $('subs-card').hidden = !!activePlan();
-  renderStarters();
-
-  if (n >= ON_FIELD) {
-    const plan = planFrom(kickoffPlanInputs());
-    const seed = seedMinutes(ids);
-    const game = ids.map(id => plan.projected[id] - seed[id]);
-    const lo = Math.min(...game), hi = Math.max(...game);
-    $('subs-fairness').textContent = subs === 0
-      ? 'No subs — everyone plays the full game; keeper rotates at halftime.'
-      : 'Everyone plays ' + fmtMin(lo) + '–' + fmtMin(hi) + ' this game (gap of ' + fmtClock(hi - lo) + ').' +
-        (hi - lo > blockLen(S) + 0.01 ? ' The gap is wider because earlier games are being balanced.' : '');
-  } else {
-    $('subs-fairness').textContent = '';
-  }
   $('use-carry').checked = state.useCarryOver;
-
-  const ok = n >= ON_FIELD;
-  $('btn-start').disabled = !ok;
-  $('btn-plan').disabled = !ok;
-  $('start-msg').textContent = ok ? '' : 'Need at least ' + ON_FIELD + ' players present (' + n + ' marked in).';
-  if (!$('plan-card').hidden) renderPlan();
 }
 
 function renderPlans() {
@@ -980,9 +960,10 @@ function renderPlans() {
   $('plan-active').textContent = act ? 'using “' + act.name + '”' : 'auto';
   $('plan-list').innerHTML = state.plans.length ? state.plans.map(pl =>
     '<li data-plan="' + esc(pl.id) + '"' + (pl.id === state.activePlanId ? ' class="on"' : '') + '>' +
-    '<span class="name">' + esc(pl.name) + (pl.id === state.activePlanId ? ' ✓' : '') + '</span>' +
+    '<span class="name">' + (pl.id === state.activePlanId ? '✓ ' : '') + esc(pl.name) + '</span>' +
     '<span class="muted">' + pl.blocks.length + ' blocks, ' + pl.subsPerHalf + ' subs per half, saved ' + esc(pl.savedAt) + '</span>' +
-    '<span class="chev">›</span></li>').join('') : '<li class="muted">No saved plans. The app will plan the rotation itself.</li>';
+    '<button class="chev" data-open="' + esc(pl.id) + '" aria-label="Open ' + esc(pl.name) + '">›</button></li>').join('')
+    : '<li class="muted">No plans yet. Tap New plan to build one.</li>';
   const fit = $('plan-fit');
   if (!act) { fit.textContent = ''; fit.classList.remove('warn-text'); return; }
   const f = planFit(act);
@@ -994,43 +975,6 @@ function renderPlans() {
   fit.classList.toggle('warn-text', bits.length > 0);
 }
 
-function renderStarters() {
-  const ids = presentIds();
-  const chosen = activeStarters();
-  const gkId = activeStartGk();
-  const card = $('starters-card');
-  if (ids.length < ON_FIELD || activePlan()) { card.hidden = true; return; }
-  card.hidden = false;
-  $('starters-summary').textContent = chosen.length ? chosen.length + '/' + ON_FIELD + ' picked' +
-    (chosen.length < ON_FIELD ? ' · rest chosen automatically' : '') : 'auto';
-  // What the plan would do on its own, and whether the coach's picks bench anyone who is owed minutes
-  const auto = planFrom(Object.assign(kickoffPlanInputs(), { starters: [], h1gk: null })).blocks[0].on;
-  const seed = seedMinutes(ids);
-  const owed = ids.filter(id => seed[id] < -0.5 && !chosen.includes(id)).sort((a, c) => seed[a] - seed[c]);
-  const note = $('starters-note');
-  if (!chosen.length) {
-    note.textContent = 'The plan will start ' + auto.map(nameOf).join(', ') + '.' +
-      (state.useCarryOver && ids.some(id => seed[id] < -0.5) ? ' Players owed minutes from earlier games go first.' : '');
-    note.classList.remove('warn-text');
-  } else if (chosen.length >= ON_FIELD && owed.length && state.useCarryOver) {
-    note.textContent = owed.map(nameOf).join(', ') + ' ' + (owed.length === 1 ? 'is' : 'are') + ' owed minutes from earlier games but not starting.';
-    note.classList.add('warn-text');
-  } else {
-    note.textContent = 'Starters are cleared after each game.';
-    note.classList.remove('warn-text');
-  }
-  $('starters').innerHTML = ids.map(id => {
-    const isStarter = chosen.includes(id);
-    return '<button class="chip ' + (isStarter ? 'on' : '') + (gkId === id ? ' gk' : '') + '" data-starter="' + id + '"' +
-      (!isStarter && chosen.length >= ON_FIELD ? ' disabled' : '') + '>' +
-      esc(nameOf(id)) + (gkId === id ? ' · GK' : '') + '</button>';
-  }).join('');
-  const sel = $('start-gk');
-  const eligibleStarters = chosen.filter(id => byId(id).gk);
-  sel.innerHTML = '<option value="">Auto</option>' + eligibleStarters.map(id =>
-    '<option value="' + id + '"' + (gkId === id ? ' selected' : '') + '>' + esc(nameOf(id)) + '</option>').join('');
-  sel.disabled = eligibleStarters.length === 0;
-}
 
 // Shared renderers for a list of plan blocks (setup preview and in-game forecast)
 function blockLabel(b, S) {
@@ -1118,32 +1062,23 @@ function planSwapsHtml(blocks, S) {
   return html;
 }
 
+// The whole plan at a glance: one column per block
 function renderPlan() {
-  const ids = presentIds();
-  if (ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
-  const act = activePlan();
-  const S = act ? act.subsPerHalf : state.subsPerHalf;
-  let blocks, totals;
-  if (act) {
-    // Show the saved plan as it will actually be played today
-    const minutes = seedMinutes(ids);
-    blocks = act.blocks.map(b => {
-      const pb = plannedBlockFor(act, b.index, ids, minutes, null) || { slots: b.slots };
-      const on = Object.values(pb.slots);
-      return { index: b.index, half: b.index <= S ? 1 : 2, start: blockStart(S, b.index), end: blockStart(S, b.index + 1), on, gk: pb.slots.GK, slots: pb.slots, bench: ids.filter(id => !on.includes(id)) };
-    });
-    totals = planMinutes(blocks, S);
-    ids.forEach(id => { totals[id] = totals[id] || 0; });
-  } else {
-    const seed = seedMinutes(ids);
-    const plan = planFrom(kickoffPlanInputs());
-    blocks = plan.blocks;
-    totals = {};
-    ids.forEach(id => { totals[id] = plan.projected[id] - seed[id]; });
-  }
+  const d = state.draft, ids = presentIds();
+  if (!d || ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
+  const S = d.subsPerHalf, L = blockLen(S);
+  const blocks = d.blocks.map(b => {
+    const on = Object.values(b.slots);
+    return {
+      index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L,
+      on, gk: b.slots.GK, slots: b.slots, bench: ids.filter(id => !on.includes(id)),
+    };
+  });
+  const totals = planMinutes(blocks, S);
+  ids.forEach(id => { totals[id] = totals[id] || 0; });
   $('plan-grid').innerHTML = planGridHtml(ids, blocks, S, totals, -1);
   $('plan-swaps').innerHTML = planSwapsHtml(blocks, S);
-  $('plan-summary').textContent = (act ? act.name + ' — ' : '') + blockCount(S) + ' shifts of ' + fmtClock(blockLen(S));
+  $('plan-summary').textContent = blockCount(S) + ' shifts of ' + fmtClock(L);
   $('plan-card').hidden = false;
 }
 
@@ -1594,11 +1529,29 @@ function autoFillFrom(from) {
   save();
 }
 
+// Keep every block of the plan being edited valid for who is available
+function adaptDraftToSquad() {
+  const d = state.draft;
+  if (!d) return;
+  const ids = presentIds();
+  if (ids.length < ON_FIELD) return;
+  const minutes = seedMinutes(ids);
+  let prev = null;
+  d.blocks = d.blocks.map(b => {
+    const pb = plannedBlockFor({ blocks: [b] }, b.index, ids, minutes, prev);
+    prev = pb ? pb.slots : prev;
+    return { index: b.index, slots: pb ? pb.slots : b.slots };
+  });
+  d.filled = null;
+  save();
+}
+
 function renderPlanner() {
   const d = state.draft;
   if (!d) return;
   const S = d.subsPerHalf, L = blockLen(S);
   const ids = presentIds();
+  renderSquad();
   $('planner-title').textContent = d.name || 'New game plan';
   $('psubs-value').textContent = S;
   $('psubs-minus').disabled = S <= MIN_SUBS;
@@ -1631,6 +1584,8 @@ function renderPlanner() {
   $('planner-mins').innerHTML = '<tr><th>Player</th><th>Minutes</th></tr>' + sorted.map(id =>
     '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
   $('btn-planner-delete').hidden = !d.id;
+  $('btn-planner-save').disabled = presentIds().length < ON_FIELD;
+  if (!$('plan-card').hidden) renderPlan();
   // The check stays until the plan is edited again
   const fill = $('btn-planner-fill');
   const done = d.filled != null;
@@ -1659,9 +1614,7 @@ function setDraftSubs(S) {
 function savePlan() {
   const d = state.draft;
   if (!d) return;
-  const name = (d.name || '').trim() || prompt('Name this plan', 'Game plan ' + (state.plans.length + 1));
-  if (!name) return;
-  d.name = name.trim().slice(0, 40);
+  d.name = (d.name || '').trim() || 'Game plan ' + (state.plans.length + 1);
   const rec = {
     id: d.id || 'pl' + Date.now(), name: d.name, subsPerHalf: d.subsPerHalf,
     playerIds: presentIds().slice(),
@@ -1903,38 +1856,15 @@ $('roster').addEventListener('click', e => {
     const name = prompt('Player name', p.name);
     if (name && name.trim()) p.name = name.trim().slice(0, 24);
   }
-  save(); renderSetup();
+  save();
+  // changing who's available reshapes every block of the plan being edited
+  if (t.dataset.act === 'present' && state.draft) adaptDraftToSquad();
+  renderPlanner();
 });
-$('starters').addEventListener('click', e => {
-  const t = e.target.closest('[data-starter]');
-  if (!t || t.disabled) return;
-  const id = t.dataset.starter;
-  if (state.starters.includes(id)) {
-    state.starters = state.starters.filter(x => x !== id);
-    if (state.startGk === id) state.startGk = null;
-  } else if (activeStarters().length < ON_FIELD) {
-    state.starters.push(id);
-  }
-  save(); renderSetup();
-});
-$('start-gk').addEventListener('change', e => { state.startGk = e.target.value || null; save(); renderSetup(); });
-$('btn-starters-clear').addEventListener('click', () => { state.starters = []; state.startGk = null; save(); renderSetup(); });
-// Fill the starters with the players who have had the least time this season (the planner's
-// own kickoff pick), including its choice of keeper so at least one goalie starts.
-$('btn-starters-suggest').addEventListener('click', () => {
-  const plan = planFrom(Object.assign(kickoffPlanInputs(), { starters: [], h1gk: null }));
-  const first = plan.blocks[0];
-  if (!first) return;
-  state.starters = first.on.slice();
-  state.startGk = (byId(first.gk) && byId(first.gk).gk) ? first.gk : null;
-  save(); renderSetup();
-});
-$('subs-minus').addEventListener('click', () => { state.subsPerHalf = Math.max(MIN_SUBS, state.subsPerHalf - 1); save(); renderSetup(); });
-$('subs-plus').addEventListener('click', () => { state.subsPerHalf = Math.min(MAX_SUBS, state.subsPerHalf + 1); save(); renderSetup(); });
-$('use-carry').addEventListener('change', e => { state.useCarryOver = e.target.checked; save(); renderSetup(); });
+$('use-carry').addEventListener('change', e => { state.useCarryOver = e.target.checked; save(); renderPlanner(); });
 $('btn-plan').addEventListener('click', () => {
   if ($('plan-card').hidden) renderPlan(); else $('plan-card').hidden = true;
-  $('btn-plan').textContent = $('plan-card').hidden ? 'Show plan' : 'Hide plan';
+  $('btn-plan').textContent = $('plan-card').hidden ? 'Show whole plan' : 'Hide whole plan';
 });
 $('btn-start').addEventListener('click', () => {
   primeAudio();
@@ -1945,19 +1875,19 @@ $('btn-start').addEventListener('click', () => {
 $('btn-season').addEventListener('click', () => { renderSeason(); show('season'); });
 // ---- game plans ----
 $('plan-list').addEventListener('click', e => {
+  const open = e.target.closest('[data-open]');
   const li = e.target.closest('[data-plan]');
-  if (!li) return;
-  const pl = planById(li.dataset.plan);
+  const pl = planById(open ? open.dataset.open : li && li.dataset.plan);
   if (!pl) return;
   state.activePlanId = pl.id;
-  newDraft(pl);
-  save(); renderPlanner(); show('planner');
+  save();
+  if (open) { newDraft(pl); renderPlanner(); show('planner'); }
+  else renderSetup();
 });
 $('btn-plan-new').addEventListener('click', () => {
-  if (presentIds().length < ON_FIELD) { alert('Mark at least ' + ON_FIELD + ' players here before building a plan.'); return; }
+  state.activePlanId = null;
   newDraft(null); renderPlanner(); show('planner');
 });
-$('btn-plan-clear').addEventListener('click', () => { state.activePlanId = null; save(); renderSetup(); });
 $('btn-planner-back').addEventListener('click', () => { renderSetup(); show('setup'); });
 $('btn-planner-rename').addEventListener('click', () => {
   const d = state.draft; if (!d) return;
@@ -2074,7 +2004,7 @@ $('pitch-wrap').addEventListener('click', e => {
 
 $('btn-save').addEventListener('click', () => { saveToSeason(); renderSetup(); show('setup'); });
 $('btn-discard').addEventListener('click', () => {
-  if (confirm('Discard this game without saving?')) { state.game = null; state.starters = []; state.startGk = null; save(); renderSetup(); show('setup'); }
+  if (confirm('Discard this game without saving?')) { state.game = null; save(); renderSetup(); show('setup'); }
 });
 
 // ============================================================
