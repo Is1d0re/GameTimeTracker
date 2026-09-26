@@ -12,14 +12,15 @@ const STORAGE_KEY = 'gametime.v1';
 
 // 1-2-3-1: the seven slots on the field, and the position groups players pick from.
 // Wide slots double as back and wing (2/11 left, 2/7 right), so both map to one group.
+// x/y are percentages of the pitch box, attacking upwards
 const SLOTS = [
-  { id: 'GK', label: 'GK', pos: 'GK' },
-  { id: 'LCB', label: 'LCB', pos: 'CB' },
-  { id: 'RCB', label: 'RCB', pos: 'CB' },
-  { id: 'LW', label: 'LB/LW', pos: 'W' },
-  { id: 'CM', label: 'CM', pos: 'CM' },
-  { id: 'RW', label: 'RB/RW', pos: 'W' },
-  { id: 'ST', label: 'ST', pos: 'ST' },
+  { id: 'GK', label: 'GK', pos: 'GK', x: 50, y: 88 },
+  { id: 'LCB', label: 'LCB', pos: 'CB', x: 27, y: 66 },
+  { id: 'RCB', label: 'RCB', pos: 'CB', x: 73, y: 66 },
+  { id: 'LW', label: 'LB/LW', pos: 'W', x: 16, y: 40 },
+  { id: 'CM', label: 'CM', pos: 'CM', x: 50, y: 42 },
+  { id: 'RW', label: 'RB/RW', pos: 'W', x: 84, y: 40 },
+  { id: 'ST', label: 'ST', pos: 'ST', x: 50, y: 13 },
 ];
 const POS = [
   { id: 'GK', label: 'GK', num: '1', name: 'Goalkeeper' },
@@ -49,8 +50,11 @@ function defaultState() {
       const prefs = DEFAULT_PREFS[name] || [];
       return { id: 'p' + i, name, prefs, gk: prefs.includes('GK'), present: true };
     }),
-    v: 3,
+    v: 4,
     subsPerHalf: 3,
+    plans: [],          // saved game plans
+    activePlanId: null, // the plan to use for the next game
+    draft: null,        // the plan currently being edited
     starters: [],     // ids the coach wants on at kickoff (optional, up to 7)
     startGk: null,    // starting keeper (optional; must be a starter)
     useCarryOver: true,
@@ -78,6 +82,7 @@ function load() {
         });
         st.v = 3;
       }
+      if (st.v < 4) { st.plans = st.plans || []; st.activePlanId = null; st.draft = null; st.v = 4; }
       st.roster.forEach(p => { p.prefs = p.prefs || []; p.gk = p.prefs.includes('GK'); });
       return st;
     }
@@ -382,19 +387,48 @@ function newGame() {
     lastAlertBlock: 0,
     pending: null,
     selected: null,
+    breakLabel: null,       // 'Water break' while stopped for one
+    playOn: false,          // first half running past 25:00
+    ftAlerted: false,
     startedAt: Date.now(),
   };
   state.game = g;
-  // Initial lineup from the planner (honours coach-picked starters)
+  // Follow a saved plan when one is chosen; otherwise generate a rotation
+  const saved = activePlan();
+  g.followPlan = !!saved;
   const plan = planFrom(kickoffPlanInputs());
-  const first = plan.blocks[0];
-  first.on.forEach(id => { players[id].onField = true; players[id].onSinceMs = 0; });
-  g.gk = first.gk; g.h1gk = plan.h1gk; g.h2gk = plan.h2gk;
-  g.plan = plan.blocks.map(b => ({ index: b.index, on: b.on, gk: b.gk, slots: b.slots }));
+  if (saved) g.plan = saved.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
+  const firstPlanned = saved ? plannedBlockFor(saved, 0, ids, seedMinutes(ids)) : null;
+  const first = firstPlanned || plan.blocks[0];
+  const firstOn = first.on || Object.values(first.slots);
+  firstOn.forEach(id => { players[id].onField = true; players[id].onSinceMs = 0; });
+  g.gk = first.gk || (first.slots && first.slots.GK) || null;
+  g.h1gk = saved ? g.gk : plan.h1gk;
+  g.h2gk = saved ? null : plan.h2gk;
+  if (!saved) g.plan = plan.blocks.map(b => ({ index: b.index, on: b.on, gk: b.gk, slots: b.slots }));
   g.log = [];
   g.slots = {};
-  resyncSlots();
+  resyncSlots(first.slots);
   logLineup();
+  save();
+}
+
+// Stop the clock and label why, so the header and the game log both say "Water break"
+function takeBreak(label) {
+  const g = state.game;
+  if (!g || g.phase === 'done') return;
+  pauseClock();
+  g.breakLabel = label;
+  g.log.push({ t: Math.round(elapsedMin() * 100) / 100, note: label });
+  save();
+}
+// Keep playing the first half past 25:00 (the ref hasn't blown for halftime)
+function playOn() {
+  const g = state.game;
+  if (!g || g.phase !== 'halftime') return;
+  g.phase = 'h1'; g.playOn = true; g.lastAlertBlock = g.subsPerHalf;
+  g.pending = null;
+  startClock();
   save();
 }
 
@@ -412,8 +446,8 @@ function logLineup() {
 function elapsedMs() {
   const g = state.game;
   if (!g) return 0;
-  let ms = g.elapsedMs + (g.running ? Date.now() - g.runningSince : 0);
-  return Math.min(ms, GAME_MIN * 60000);
+  // Not capped at full time: the ref decides when the game ends, not the app
+  return g.elapsedMs + (g.running ? Date.now() - g.runningSince : 0);
 }
 const elapsedMin = () => elapsedMs() / 60000;
 
@@ -508,7 +542,8 @@ function setOnField(id, on) {
 function startClock() {
   const g = state.game;
   if (g.running) return;
-  if (g.phase === 'halftime') g.phase = 'h2';
+  if (g.phase === 'halftime') { g.phase = 'h2'; g.playOn = false; }
+  g.breakLabel = null;
   g.running = true; g.runningSince = Date.now();
   requestWakeLock();
   save();
@@ -528,27 +563,36 @@ function tick() {
   const S = g.subsPerHalf;
   const min = elapsedMin();
 
-  if (g.phase === 'h1' && min >= HALF_MIN - 1e-9) {
+  if (g.phase === 'h1' && !g.playOn && min >= HALF_MIN - 1e-9) {
     pauseClock(); g.elapsedMs = HALF_MIN * 60000; g.phase = 'halftime';
     g.lastAlertBlock = S + 1;
     alertUser();
     suggestForBlock(S + 1, 'Halftime');
     save();
-  } else if (g.phase === 'h2' && min >= GAME_MIN - 1e-9) {
-    pauseClock(); g.elapsedMs = GAME_MIN * 60000; g.phase = 'done';
+  } else if (g.phase === 'h2' && !g.ftAlerted && min >= GAME_MIN - 1e-9) {
+    // Full time by the clock, but the game is over when the coach says so
+    g.ftAlerted = true;
     alertUser();
     save();
-    showSummary();
-    return;
   }
 
-  const b = blockAt(S, elapsedMin());
+  const b = currentBlock(g);
   if (g.running && b > g.lastAlertBlock) {
     g.lastAlertBlock = b;
     alertUser();
     suggestForBlock(b, 'Sub time');
     save();
   }
+}
+
+// The block we are in. Stoppage time stays in the last block of its half rather than
+// spilling into the next one.
+function currentBlock(g) {
+  const S = g.subsPerHalf;
+  const b = blockAt(S, elapsedMin());
+  if (g.phase === 'h1') return Math.min(b, S);
+  if (g.phase === 'halftime') return S + 1;
+  return Math.min(b, blockCount(S) - 1);
 }
 
 const playedIds = ids => ids.filter(id => playedMs(id) > 0);
@@ -571,26 +615,52 @@ function currentMinutes() {
   return m;
 }
 
-// Coach override for the upcoming sub: { block, off: [ids], on: [ids] }. Only valid for
-// that block; ids that have since changed sides are dropped.
-function validOverride(target, onField, ids) {
+// Coach override for the upcoming sub: the desired field state, { block, slots }.
+// Only valid for that block; players who have since left are dropped.
+function validOverride(target, ids) {
   const ov = state.game.nextOverride;
   if (!ov || ov.block !== target) return null;
-  const off = ov.off.filter(id => onField.includes(id));
-  const on = ov.on.filter(id => ids.includes(id) && !onField.includes(id));
+  const slots = {};
+  SLOTS.forEach(sl => { const pid = ov.slots[sl.id]; if (pid && ids.includes(pid)) slots[sl.id] = pid; });
+  return { slots };
+}
+// What a desired field state means as a substitution
+function diffForSlots(slots, onField, gk) {
+  const on2 = Object.values(slots);
   return {
-    off, on,
-    pairs: (ov.pairs || []).filter(pr => off.includes(pr[0]) && on.includes(pr[1])),
+    off: onField.filter(id => !on2.includes(id)),
+    on: on2.filter(id => !onField.includes(id)),
+    gk: slots.GK && slots.GK !== gk ? slots.GK : null,
   };
 }
-// The slot an explicitly paired player should take: the one their partner is vacating
-function pinnedSlots(pairs, oldSlots) {
-  const fixed = {};
-  (pairs || []).forEach(pr => {
-    const sl = slotOfPlayer(oldSlots || {}, pr[0]);
-    if (sl) fixed[sl] = pr[1];
+
+// The loaded game plan's lineup for a block, with anyone unavailable replaced. Returns
+// null when no plan is loaded, so the planner takes over.
+function plannedBlock(target, ids, onField, minutes) {
+  const g = state.game;
+  if (!g.followPlan) return null;
+  return plannedBlockFor({ blocks: g.plan || [] }, target, ids, minutes, g.slots);
+}
+function plannedBlockFor(pl, target, ids, minutes, prevSlots) {
+  const src = (pl.blocks || []).find(b => b.index === target);
+  if (!src || !src.slots) return null;
+  const keep = {}, taken = [];
+  SLOTS.forEach(sl => {
+    const pid = src.slots[sl.id];
+    if (pid && ids.includes(pid) && !taken.includes(pid)) { keep[sl.id] = pid; taken.push(pid); }
   });
-  return fixed;
+  const want = Math.min(ON_FIELD, ids.length);
+  if (taken.length < want) {
+    // Fill the gaps the same way the planner would: best position fit, fewest minutes
+    const spare = ids.filter(id => !taken.includes(id)).sort((a, c) => (minutes[a] || 0) - (minutes[c] || 0));
+    const need = SLOTS.filter(sl => !keep[sl.id]).slice(0, want - taken.length).map(sl => sl.id);
+    const fill = assignSlots({
+      on: taken.concat(spare.slice(0, need.length)), gk: keep.GK || null,
+      prefsOf, posMins: seasonPosMins(ids), prev: prevSlots || {}, fixed: keep,
+    });
+    Object.keys(fill).forEach(sid => { keep[sid] = fill[sid]; });
+  }
+  return { slots: keep, gk: keep.GK || null, on: Object.values(keep), fromPlan: true };
 }
 
 // Keeper for a manually built lineup: planned half keeper if on, else current keeper if
@@ -608,16 +678,13 @@ function pickGk(target, lineup, gk, minutes) {
 // moment. Honours a coach override; otherwise asks the planner.
 function subForBlock(target, ids, onField, gk, minutes) {
   const g = state.game, S = g.subsPerHalf;
-  const ov = validOverride(target, onField, ids);
-  if (ov) {
-    const on2 = onField.filter(id => !ov.off.includes(id)).concat(ov.on);
-    // A player mapped onto the keeper takes the gloves
-    const gkPair = (ov.pairs || []).find(pr => pr[0] === gk);
-    const gk2 = gkPair ? gkPair[1] : pickGk(target, on2, gk, minutes);
-    const fixed = pinnedSlots(ov.pairs, g.slots);
-    const slots = assignSlots({ on: on2, gk: gk2, prefsOf, posMins: livePosMins(ids), prev: g.slots, fixed });
+  const manual = validOverride(target, ids) || plannedBlock(target, ids, onField, minutes);
+  if (manual) {
+    const slots = manual.slots;
+    const on2 = Object.values(slots);
+    const gk2 = slots.GK || pickGk(target, on2, gk, minutes);
     const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)), slots };
-    return { block, diff: { off: ov.off, on: ov.on, gk: gk2 !== gk ? gk2 : null }, manual: true, plan: null };
+    return { block, diff: diffForSlots(slots, onField, gk), manual: true, fromPlan: !!manual.fromPlan, plan: null };
   }
   const plan = planFrom({
     ids, S, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
@@ -638,7 +705,7 @@ function suggestForBlock(b, title) {
   if (!d.off.length && !d.on.length && !d.gk) {
     g.pending = { title, off: [], on: [], gk: null, note: 'No change needed. The lineup is already balanced.', block: b, slots: sub.block.slots };
   } else {
-    g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, block: b, slots: sub.block.slots };
+    g.pending = { title, off: d.off, on: d.on, gk: d.gk, manual: sub.manual, fromPlan: sub.fromPlan, block: b, slots: sub.block.slots };
   }
   if (g.nextOverride && g.nextOverride.block <= b) g.nextOverride = null;
   g.editNext = false; g.editSel = null;
@@ -764,28 +831,72 @@ function setHtml(el, html) {
   if (el.__html === html) return;
   el.__html = html; el.innerHTML = html;
 }
-// Player lists tick every second. Rebuild the rows only when something structural changes;
-// otherwise just update the two bits of text that moved.
-function paintList(el, rows, empty) {
-  const sig = rows.map(r => r.key).join('|');
-  if (el.dataset.sig === sig) {
-    rows.forEach(r => {
-      const li = el.querySelector('li[data-id="' + r.id + '"]');
-      if (!li) return;
-      const m = li.querySelector('.pmin');
-      if (m && m.textContent !== r.min) m.textContent = r.min;
-      const pr = li.querySelector('.pproj');
-      if (pr && pr.textContent !== r.proj) pr.textContent = r.proj;
+const views = ['setup', 'game', 'summary', 'season', 'gamedetail', 'planner'];
+function show(view) {
+  views.forEach(v => { const el = $('view-' + v); if (el) el.hidden = v !== view; });
+  window.scrollTo(0, 0);
+}
+
+// ============================================================
+// The pitch: seven positions laid out in the 1-2-3-1, plus a bench strip.
+// State is a { slotId: playerId } map — the same shape assignSlots returns — so the live
+// game and the plan editor share one component.
+// ============================================================
+function pitchHtml(slots, opts) {
+  const o = opts || {};
+  const taken = Object.values(slots || {});
+  const chips = SLOTS.map(sl => {
+    const id = (slots || {})[sl.id];
+    const sel = o.selected === sl.id;
+    const cls = ['spot', sl.id === 'GK' ? 'gk' : '', sel ? 'sel' : '', id ? '' : 'empty',
+      id && o.behind && o.behind[id] ? 'behind' : '',
+      id && o.incoming && o.incoming.includes(id) ? 'incoming' : '',
+      id && o.outgoing && o.outgoing.includes(id) ? 'outgoing' : ''].filter(Boolean).join(' ');
+    const sub = id ? (o.sub ? o.sub(id) : '') : 'empty';
+    return '<button class="' + cls + '" style="left:' + sl.x + '%;top:' + sl.y + '%" data-slot="' + sl.id + '"' +
+      (o.disabled ? ' disabled' : '') + '>' +
+      '<span class="pos">' + esc(sl.label) + '</span>' +
+      '<span class="who">' + (id ? esc(nameOf(id)) : '—') + '</span>' +
+      (sub ? '<span class="sub">' + esc(sub) + '</span>' : '') + '</button>';
+  }).join('');
+  const benchIds = (o.bench || []).filter(id => !taken.includes(id));
+  const bench = benchIds.map(id =>
+    '<button class="bchip' + (o.selected === 'bench:' + id ? ' sel' : '') +
+      (o.behind && o.behind[id] ? ' behind' : '') +
+      (o.incoming && o.incoming.includes(id) ? ' incoming' : '') + '"' +
+      ' data-bench="' + id + '"' + (o.disabled ? ' disabled' : '') + '>' +
+      '<span class="who">' + esc(nameOf(id)) + '</span>' +
+      (o.sub ? '<span class="sub">' + esc(o.sub(id)) + '</span>' : '') + '</button>').join('');
+  return '<div class="pitch">' + chips + '</div>' +
+    '<div class="benchbar"><span class="blabel">Bench ' + benchIds.length + '</span>' +
+    (bench || '<span class="bnone">nobody</span>') + '</div>';
+}
+
+// Draw the pitch, but rebuild it only when the lineup or the highlighting changes.
+// The running minutes are written in place — replacing the whole pitch every second
+// fights scrolling and swallows taps on a phone.
+function paintPitch(el, slots, opts) {
+  const o = opts || {};
+  const key = [
+    SLOTS.map(sl => sl.id + '=' + ((slots || {})[sl.id] || '')).join(','),
+    (o.bench || []).join(','), o.selected || '', o.disabled ? 'd' : '',
+    Object.keys(o.behind || {}).join(','), (o.incoming || []).join(','), (o.outgoing || []).join(','),
+  ].join('|');
+  if (el.dataset.pkey === key) {
+    if (!o.sub) return;
+    el.querySelectorAll('[data-slot]').forEach(b => {
+      const id = (slots || {})[b.dataset.slot];
+      const sp = b.querySelector('.sub');
+      if (id && sp) { const t = o.sub(id); if (sp.textContent !== t) sp.textContent = t; }
+    });
+    el.querySelectorAll('[data-bench]').forEach(b => {
+      const sp = b.querySelector('.sub');
+      if (sp) { const t = o.sub(b.dataset.bench); if (sp.textContent !== t) sp.textContent = t; }
     });
     return;
   }
-  el.dataset.sig = sig;
-  el.innerHTML = rows.map(r => r.html).join('') || empty;
-}
-const views = ['setup', 'game', 'summary', 'season', 'gamedetail'];
-function show(view) {
-  views.forEach(v => { $('view-' + v).hidden = v !== view; });
-  window.scrollTo(0, 0);
+  el.dataset.pkey = key;
+  el.innerHTML = pitchHtml(slots, o);
 }
 
 // ---------- Setup ----------
@@ -829,6 +940,7 @@ function renderSetup() {
   const water = waterBreakInHalf(S);
   $('subs-schedule').textContent = 'Subs at ' + times.map(t => fmtClock(t) + (t === water ? ' (water break)' : '')).join(', ') +
     ' in each half. Shifts of ' + fmtClock(blockLen(S)) + '.';
+  renderPlans();
   renderStarters();
 
   if (n >= ON_FIELD) {
@@ -852,12 +964,31 @@ function renderSetup() {
   if (!$('plan-card').hidden) renderPlan();
 }
 
+function renderPlans() {
+  const act = activePlan();
+  $('plan-active').textContent = act ? 'using “' + act.name + '”' : 'auto';
+  $('plan-list').innerHTML = state.plans.length ? state.plans.map(pl =>
+    '<li data-plan="' + esc(pl.id) + '"' + (pl.id === state.activePlanId ? ' class="on"' : '') + '>' +
+    '<span class="name">' + esc(pl.name) + (pl.id === state.activePlanId ? ' ✓' : '') + '</span>' +
+    '<span class="muted">' + pl.blocks.length + ' blocks, ' + pl.subsPerHalf + ' subs per half, saved ' + esc(pl.savedAt) + '</span>' +
+    '<span class="chev">›</span></li>').join('') : '<li class="muted">No saved plans. The app will plan the rotation itself.</li>';
+  const fit = $('plan-fit');
+  if (!act) { fit.textContent = ''; fit.classList.remove('warn-text'); return; }
+  const f = planFit(act);
+  const bits = [];
+  if (act.subsPerHalf !== state.subsPerHalf) bits.push('This plan uses ' + act.subsPerHalf + ' subs per half; today is set to ' + state.subsPerHalf + '.');
+  if (f.missing.length) bits.push(f.missing.map(nameOf).join(', ') + (f.missing.length === 1 ? ' is' : ' are') + ' in the plan but not here — their spots get filled by whoever is available.');
+  if (f.extra.length) bits.push(f.extra.map(nameOf).join(', ') + (f.extra.length === 1 ? ' is' : ' are') + ' here but not in the plan, so they only come on to cover a gap.');
+  fit.textContent = bits.join(' ');
+  fit.classList.toggle('warn-text', bits.length > 0);
+}
+
 function renderStarters() {
   const ids = presentIds();
   const chosen = activeStarters();
   const gkId = activeStartGk();
   const card = $('starters-card');
-  if (ids.length < ON_FIELD) { card.hidden = true; return; }
+  if (ids.length < ON_FIELD || activePlan()) { card.hidden = true; return; }
   card.hidden = false;
   $('starters-summary').textContent = chosen.length ? chosen.length + '/' + ON_FIELD + ' picked' +
     (chosen.length < ON_FIELD ? ' · rest chosen automatically' : '') : 'auto';
@@ -984,15 +1115,30 @@ function planSwapsHtml(blocks, S) {
 
 function renderPlan() {
   const ids = presentIds();
-  const S = state.subsPerHalf;
   if (ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
-  const seed = seedMinutes(ids);
-  const plan = planFrom(kickoffPlanInputs());
-  const totals = {};
-  ids.forEach(id => { totals[id] = plan.projected[id] - seed[id]; });
-  $('plan-grid').innerHTML = planGridHtml(ids, plan.blocks, S, totals, -1);
-  $('plan-swaps').innerHTML = planSwapsHtml(plan.blocks, S);
-  $('plan-summary').textContent = blockCount(S) + ' shifts of ' + fmtClock(blockLen(S));
+  const act = activePlan();
+  const S = act ? act.subsPerHalf : state.subsPerHalf;
+  let blocks, totals;
+  if (act) {
+    // Show the saved plan as it will actually be played today
+    const minutes = seedMinutes(ids);
+    blocks = act.blocks.map(b => {
+      const pb = plannedBlockFor(act, b.index, ids, minutes, null) || { slots: b.slots };
+      const on = Object.values(pb.slots);
+      return { index: b.index, half: b.index <= S ? 1 : 2, start: blockStart(S, b.index), end: blockStart(S, b.index + 1), on, gk: pb.slots.GK, slots: pb.slots, bench: ids.filter(id => !on.includes(id)) };
+    });
+    totals = planMinutes(blocks, S);
+    ids.forEach(id => { totals[id] = totals[id] || 0; });
+  } else {
+    const seed = seedMinutes(ids);
+    const plan = planFrom(kickoffPlanInputs());
+    blocks = plan.blocks;
+    totals = {};
+    ids.forEach(id => { totals[id] = plan.projected[id] - seed[id]; });
+  }
+  $('plan-grid').innerHTML = planGridHtml(ids, blocks, S, totals, -1);
+  $('plan-swaps').innerHTML = planSwapsHtml(blocks, S);
+  $('plan-summary').textContent = (act ? act.name + ' — ' : '') + blockCount(S) + ' shifts of ' + fmtClock(blockLen(S));
   $('plan-card').hidden = false;
 }
 
@@ -1004,7 +1150,7 @@ function liveForecast() {
   if (!g || g.phase === 'done') return null;
   const S = g.subsPerHalf, B = blockCount(S);
   const min = elapsedMin();
-  const b = blockAt(S, min);
+  const b = currentBlock(g);
   const ids = presentIds().filter(id => g.players[id]);
   let onField = ids.filter(id => g.players[id].onField);
   let gk = g.gk;
@@ -1014,7 +1160,8 @@ function liveForecast() {
     if (p.gk) gk = p.gk;
   }
   const ov = g.nextOverride;
-  const key = [b, onField.join(','), gk, ids.join(','), g.h2gk, ov ? ov.block + ':' + ov.off.join(',') + '>' + ov.on.join(',') : ''].join('|');
+  const ovKey = ov ? ov.block + ':' + SLOTS.map(sl => ov.slots[sl.id] || '-').join(',') : '';
+  const key = [b, onField.join(','), gk, ids.join(','), g.h2gk, ovKey, g.followPlan ? 'p' : ''].join('|');
   const seed = seedMinutes(ids);
   const minutes = currentMinutes();
   const remain = Math.max(0, Math.min(blockStart(S, b + 1), GAME_MIN) - min);
@@ -1023,7 +1170,7 @@ function liveForecast() {
   let blocks = [current], next = null, projected = minutes;
   if (b + 1 < B) {
     const sub = subForBlock(b + 1, ids, onField, gk, minutes);
-    next = { block: sub.block, diff: sub.diff, manual: sub.manual };
+    next = { block: sub.block, diff: sub.diff, manual: sub.manual, fromPlan: sub.fromPlan };
     if (sub.manual) {
       // Coach's lineup for the next block, then let the planner take over from there
       const minutes2 = Object.assign({}, minutes);
@@ -1048,7 +1195,7 @@ function liveForecast() {
   // how long they are (and will be) available. "Behind" = ends more than a block short
   // of fair even if the plan is followed — beyond what the rotation can even out.
   const totals = {}, fair = {}, behind = {};
-  const left = GAME_MIN - min;
+  const left = Math.max(0, GAME_MIN - min);
   const avail = {}; let sumAvail = 0, sumTotal = 0;
   ids.forEach(id => {
     totals[id] = projected[id] - seed[id];
@@ -1068,31 +1215,43 @@ function renderGame() {
   if (!g) return;
   const S = g.subsPerHalf;
   const min = elapsedMin();
-  const inHalf = g.phase === 'h1' ? min : g.phase === 'halftime' ? 0 : min - HALF_MIN;
-  const b = blockAt(S, min);
+  const inHalf = g.phase === 'h1' ? min : g.phase === 'halftime' ? HALF_MIN : min - HALF_MIN;
+  const b = currentBlock(g);
+  const fullTime = g.phase === 'h2' && min >= GAME_MIN;
+  const overHalf = g.phase === 'h1' && min >= HALF_MIN;
 
   const clock = document.querySelector('.clock');
   clock.classList.toggle('paused', !g.running && g.phase !== 'halftime');
-  clock.classList.toggle('halftime', g.phase === 'halftime');
-  $('clock-time').textContent = fmtClock(g.phase === 'halftime' ? HALF_MIN : Math.min(inHalf, HALF_MIN)).padStart(5, '0');
-  $('clock-half').textContent = g.phase === 'h1' ? '1st half' : g.phase === 'halftime' ? 'Halftime' : g.phase === 'h2' ? '2nd half' : 'Full time';
+  clock.classList.toggle('halftime', g.phase === 'halftime' || !!g.breakLabel);
+  // The clock keeps counting past regulation; the pill says so
+  $('clock-time').textContent = fmtClock(inHalf).padStart(5, '0');
+  $('clock-half').textContent = g.phase === 'done' ? 'Final'
+    : g.breakLabel ? g.breakLabel
+    : g.phase === 'halftime' ? 'Halftime'
+    : fullTime ? 'Full time'
+    : overHalf ? '1st half +'
+    : g.phase === 'h1' ? '1st half' : '2nd half';
   $('clock-block').textContent = g.phase === 'done' ? '' : 'Block ' + (b + 1) + '/' + blockCount(S);
 
   const nextEl = $('clock-next');
   nextEl.classList.remove('soon');
-  if (g.phase === 'halftime') {
-    nextEl.textContent = 'Halftime — make subs, then start 2nd half';
-  } else if (g.phase === 'done') {
+  if (g.phase === 'done') {
     nextEl.textContent = 'Game over';
+  } else if (g.phase === 'halftime') {
+    nextEl.textContent = 'Halftime — make subs, then start the 2nd half';
+  } else if (g.breakLabel) {
+    nextEl.textContent = g.breakLabel + ' — clock stopped';
+  } else if (fullTime || overHalf) {
+    nextEl.textContent = 'Playing on — tap End game when the ref blows';
   } else {
     const nextBoundary = Math.min(blockStart(S, b + 1), g.phase === 'h1' ? HALF_MIN : GAME_MIN);
-    const remain = nextBoundary - min;
+    const remain = Math.max(0, nextBoundary - min);
     const label = Math.abs(nextBoundary - HALF_MIN) < 1e-6 ? 'Halftime' : Math.abs(nextBoundary - GAME_MIN) < 1e-6 ? 'Full time' : 'Next sub';
     nextEl.textContent = label + ' in ' + fmtClock(remain);
     if (remain <= 1 && g.running) nextEl.classList.add('soon');
   }
 
-  $('timeline-fill').style.width = (min / GAME_MIN * 100) + '%';
+  $('timeline-fill').style.width = Math.min(100, min / GAME_MIN * 100) + '%';
   const marks = $('timeline-marks');
   if (marks.dataset.s !== String(S)) {
     marks.dataset.s = String(S);
@@ -1103,16 +1262,21 @@ function renderGame() {
       const half = Math.abs(t - HALF_MIN) < 1e-6;
       const inH = t - (t >= HALF_MIN ? HALF_MIN : 0);
       const isWater = !half && Math.abs(inH - water) < 1e-6;
-      const s = document.createElement('span');
-      s.className = half ? 'half' : isWater ? 'water' : '';
-      s.style.left = (t / GAME_MIN * 100) + '%';
-      marks.appendChild(s);
+      const sp = document.createElement('span');
+      sp.className = half ? 'half' : isWater ? 'water' : '';
+      sp.style.left = (t / GAME_MIN * 100) + '%';
+      marks.appendChild(sp);
     }
   }
 
   const btn = $('btn-clock');
   btn.disabled = g.phase === 'done';
   btn.textContent = g.phase === 'halftime' ? 'Start 2nd half' : g.running ? 'Pause' : (min === 0 ? 'Start' : 'Resume');
+  // Halftime offers "Play on" for a long first half; otherwise the button stops for a drink
+  const brk = $('btn-break');
+  brk.hidden = g.phase === 'done';
+  brk.textContent = g.phase === 'halftime' ? 'Play on' : g.breakLabel ? 'Resume' : 'Water break';
+  brk.disabled = false;
 
   const ids = presentIds().filter(id => g.players[id]);
 
@@ -1121,7 +1285,7 @@ function renderGame() {
   if (g.pending) {
     const p = g.pending;
     $('banner-title').textContent = p.title;
-    const pb = p.block != null ? p.block : blockAt(S, min);
+    const pb = p.block != null ? p.block : b;
     $('banner').querySelector('.board-strip .muted').textContent = pb === S + 1 ? 'before the 2nd half' :
       'H' + (pb <= S ? 1 : 2) + ' ' + fmtClock(blockStart(S, pb) - (pb > S ? HALF_MIN : 0));
     // An edited sub can leave the wrong number on the field; never let Apply commit that
@@ -1130,9 +1294,9 @@ function renderGame() {
     const want = Math.min(ON_FIELD, ids.length);
     const over = after !== want;
     let extra = '';
-    if (p.manual) extra += '<span class="muted">Edited by you</span>';
+    if (p.manual && !p.fromPlan) extra += '<span class="muted">Edited by you</span>';
     if (over) extra += '<span class="warn">That leaves ' + after + ' on the field, not ' + want +
-      '. Tap Edit next sub to fix it.</span>';
+      '. Tap Edit lineup to fix it.</span>';
     setHtml($('banner-body'), p.note
       ? '<div class="board-foot">' + esc(p.note) + '</div>'
       : boardPanelsHtml({ off: p.off, on: p.on, gk: p.gk }, extra, p.slots, g.slots));
@@ -1164,14 +1328,14 @@ function renderGame() {
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
-    setHtml(previewEl, '<div class="board-strip"><span>Editing next sub</span>' +
-      '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Done</button></span></div>' +
+    setHtml(previewEl, '<div class="board-strip"><span>Editing lineup</span>' +
+      '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Cancel</button></span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
-      '<span class="muted">or Done to wait for ' + esc(whenLabel.replace(/^at /, '')) + '</span></div>');
+      '<button class="secondary" id="btn-edit-stage"' + (problem || !hasChange ? ' disabled' : '') + '>Save for ' + esc(whenLabel.replace(/^at /, '')) + '</button></div>');
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
-    setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.manual ? 'edited by you' : 'from the plan') + '</span></div>' +
+    setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.fromPlan ? 'from your plan' : next.manual ? 'edited by you' : 'auto') + '</span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots));
     previewEl.hidden = false;
   } else if (canEdit && !g.pending) {
@@ -1187,77 +1351,50 @@ function renderGame() {
     setHtml($('live-plan-swaps'), fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, S) : '<li>No more subs scheduled.</li>');
   }
 
-  const tag = id => nextOff.has(id) ? '<span class="tag-next off">' + tagOff + '</span>' : nextOn.has(id) ? '<span class="tag-next on">' + tagOn + '</span>' : '';
-  const isBehind = id => !!(fc && fc.behind[id]);
-  const cls = id => (isBehind(id) ? 'behind ' : '');
-  // GK badge only on players marked as keepers (everyone, if none are marked)
-  const anyKeeper = state.roster.some(p => p.present && p.gk);
-  const keeper = id => !anyKeeper || byId(id).gk;
-  const nextSlots = (g.pending && g.pending.slots) || (next && next.block.slots) || {};
-  const slotTag = id => {
-    const here = slotLabel(id);
-    if (here) return '<span class="slot">' + esc(here) + '</span>';
-    const to = slotById(slotOfPlayer(nextSlots, id));
-    return to && nextOn.has(id) ? '<span class="slot next">→ ' + esc(to.label) + '</span>' : '';
-  };
-  const gkBadge = (id, onField) => !keeper(id) ? '' :
-    onField ? '<button class="gkbtn" data-gk="' + id + '" aria-label="Make keeper">GK</button>' : '<span class="gkbtn static">GK</span>';
-  // In edit mode the card's right side becomes a next-off / next-on toggle
   const editing = !!g.editNext;
-  // In edit mode the whole card is the toggle: picked cards fill red (off) or green (on)
-  const pickedCls = (id, onField) => (onField ? nextOff.has(id) : nextOn.has(id)) ? (onField ? 'picked-off ' : 'picked-on ') : '';
-  const toggle = (id, onField) => {
-    const picked = onField ? nextOff.has(id) : nextOn.has(id);
-    return '<span class="etoggle">' + (picked ? '✓' : '') + '</span>';
-  };
-  $('field-count').textContent = field.length + '/' + ON_FIELD;
-  $('bench-count').textContent = String(bench.length);
-  const projText = id => fc ? (isBehind(id) ? 'Short — on pace for ' : 'On pace for ') + fmtMin(fc.totals[id]) : '';
-  const row = (id, onField) => {
-    const awaiting = editing && g.editSel === id;
-    const liCls = (onField && g.gk === id ? 'gk ' : '') + (g.selected === id ? 'selected ' : '') +
-      (editing ? 'editing ' + (awaiting ? 'await ' : '') + pickedCls(id, onField) : '') + cls(id);
-    const head = '<span class="pname">' + esc(nameOf(id)) + slotTag(id) + (editing ? '' : tag(id)) + '</span>';
-    // In edit mode the second line says what will happen, and who with
-    let editNote;
-    const partner = editing ? editPartner(id) : null;
-    if (onField) {
-      editNote = !nextOff.has(id) ? 'Stays on'
-        : partner ? nameOf(partner) + ' comes on here'
-        : awaiting ? 'Off — tap a bench player' : 'Off next';
-    } else {
-      const sl = partner ? slotById(slotOf(partner)) : null;
-      editNote = !nextOn.has(id) ? 'Stays off'
-        : partner ? 'On at ' + (sl ? sl.label : '?') + ' for ' + nameOf(partner)
-        : awaiting ? 'On — tap a field player' : 'On next';
+  const isBehind = id => !!(fc && fc.behind[id]);
+  // Live: what is on the field now. Editing: the state the coach is building.
+  const shown = editing ? editSlots() : (g.slots || {});
+  const behind = {};
+  ids.forEach(id => { if (isBehind(id)) behind[id] = true; });
+  const incoming = editing ? Object.values(shown).filter(id => !g.players[id].onField)
+    : [...nextOn];
+  const outgoing = editing ? ids.filter(id => g.players[id].onField && !Object.values(shown).includes(id))
+    : [...nextOff];
+  const nextSlots = (g.pending && g.pending.slots) || (next && next.block.slots) || {};
+  const sub = id => {
+    if (editing) {
+      const here = slotOfPlayer(shown, id);
+      if (!here) return g.players[id].onField ? 'coming off' : fmtMin(mins[id]);
+      return g.players[id].onField ? fmtMin(mins[id]) : 'coming on';
     }
-    const tail = editing
-      ? '<small class="pproj">' + editNote + '</small>' + toggle(id, onField)
-      : '<small class="pproj">' + esc(projText(id)) + '</small>' +
-        '<span class="pmin">' + fmtMin(mins[id]) + '</span>' + gkBadge(id, onField);
-    return {
-      id, min: fmtMin(mins[id]), proj: editing ? editNote : projText(id),
-      key: id + ':' + liCls + ':' + head + ':' + (editing ? 'e' + toggle(id, onField) : gkBadge(id, onField)),
-      html: '<li data-id="' + id + '" class="' + liCls + '">' + head + tail + '</li>',
-    };
+    const to = slotById(slotOfPlayer(nextSlots, id));
+    if (nextOn.has(id) && to) return '→ ' + to.label;
+    if (nextOff.has(id)) return 'off next';
+    return fmtMin(mins[id]);
   };
-  paintList($('field-list'), field.map(id => row(id, true)), '');
-  paintList($('bench-list'), bench.map(id => row(id, false)), '<li class="muted">No subs</li>');
+  const benchIds = ids.filter(id => !Object.values(shown).includes(id));
+  paintPitch($('pitch-wrap'), shown, {
+    bench: benchIds, selected: editing ? g.editSel : null, behind, incoming, outgoing,
+    sub, disabled: !editing && g.phase === 'done',
+  });
+
   $('btn-edit-mode').hidden = !canEdit;
-  $('btn-edit-mode').textContent = editing ? 'Done editing' : 'Edit next sub';
+  $('btn-edit-mode').textContent = editing ? 'Done editing' : 'Edit lineup';
   $('btn-edit-mode').classList.toggle('primary', editing);
   $('btn-edit-mode').classList.toggle('secondary', !editing);
-  $('btn-suggest').disabled = bench.length === 0 || editing;
-  $('game-hint').textContent = editing ? 'Tap a field player, then the bench player replacing them. Sub now, or Done to wait for the whistle.'
-    : 'Tap Edit next sub to change the lineup or make an unplanned sub. Tap GK to change keeper.';
-  $('btn-suggest').disabled = bench.length === 0;
+  $('btn-suggest').disabled = benchIds.length === 0 || editing;
+  $('game-hint').textContent = editing
+    ? 'Tap a position, then a bench player to put them there. Tap two positions to swap.'
+    : 'Tap Edit lineup to change positions or make an unplanned sub.';
 }
 
 // Players can only be moved in edit mode; a stray tap on the sideline must not change the lineup
-function onPlayerTap(id) {
+function onPitchTap(kind, value) {
   const g = state.game;
-  if (!g || g.phase === 'done' || !g.players[id] || !g.editNext) return;
-  toggleNextOverride(id);
+  if (!g || g.phase === 'done' || !g.editNext) return;
+  if (kind === 'slot') tapSlot(value);
+  else if (g.players[value]) tapBench(value);
 }
 
 // Apply the edited off/on right now instead of waiting for the next scheduled sub
@@ -1269,7 +1406,7 @@ function subNow() {
   const off = d.off.filter(id => g.players[id] && g.players[id].onField);
   const on = d.on.filter(id => g.players[id] && !g.players[id].onField);
   if (!off.length && !on.length && !d.gk) return;
-  g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: blockAt(g.subsPerHalf, elapsedMin()), slots: fc.next.block.slots };
+  g.pending = { title: 'Sub now', off, on, gk: d.gk, manual: true, block: currentBlock(g), slots: fc.next.block.slots };
   applyPending();
   g.nextOverride = null;
   g.editNext = false; g.editSel = null;
@@ -1283,70 +1420,64 @@ function startEditNext() {
   const fc = liveForecast();
   if (!fc || !fc.next) return;
   if (!g.nextOverride || g.nextOverride.block !== fc.next.block.index) {
-    // Start from the plan, including which player replaces which
-    const pairs = subPairs(fc.next.diff, fc.next.block.slots, g.slots)
-      .filter(pr => pr.off && pr.on).map(pr => [pr.off, pr.on]);
-    g.nextOverride = { block: fc.next.block.index, off: [...fc.next.diff.off], on: [...fc.next.diff.on], pairs };
+    // Start from the field as it stands, so changing one player is one tap
+    g.nextOverride = { block: fc.next.block.index, slots: Object.assign({}, g.slots) };
   }
   g.editNext = true; g.editSel = null;
   save(); renderGame();
 }
-const editPartner = id => {
-  const ov = (state.game.nextOverride || {});
-  const pr = (ov.pairs || []).find(x => x[0] === id || x[1] === id);
-  return pr ? (pr[0] === id ? pr[1] : pr[0]) : null;
-};
-function unpair(ov, id) { ov.pairs = (ov.pairs || []).filter(pr => pr[0] !== id && pr[1] !== id); }
 
-// Tapping in edit mode: mark a player, then tap someone on the other side to map them
-// together. Tapping a marked player clears them.
-function toggleNextOverride(id) {
-  const g = state.game, ov = g.nextOverride;
-  if (!ov) return;
-  ov.pairs = ov.pairs || [];
-  const onField = g.players[id].onField;
-  const side = onField ? 'off' : 'on';
-  const marked = ov[side].includes(id);
-
-  if (marked) {                                  // clear this player
-    ov[side] = ov[side].filter(x => x !== id);
-    unpair(ov, id);
-    if (g.editSel === id) g.editSel = null;
-  } else {
-    ov[side] = ov[side].concat(id);
-    const sel = g.editSel;
-    if (sel && g.players[sel] && g.players[sel].onField !== onField && !editPartner(sel)) {
-      unpair(ov, id);
-      ov.pairs.push(onField ? [id, sel] : [sel, id]);
-      g.editSel = null;
-    } else {
-      g.editSel = id;                            // wait for a partner
-    }
+// --- editing a field layout by tapping: pure helpers shared by the live pitch and the
+// plan editor. Each mutates `slots` and returns the new selection. ---
+function slotTap(slots, sel, slotId) {
+  if (sel === slotId) return null;                      // tap again to deselect
+  if (sel && SLOTS.some(sl => sl.id === sel)) {         // two positions: swap them
+    const a = slots[sel], b = slots[slotId];
+    if (b) slots[sel] = b; else delete slots[sel];
+    if (a) slots[slotId] = a; else delete slots[slotId];
+    return null;
   }
+  return slotId;
+}
+function benchTap(slots, sel, id) {
+  const here = slotOfPlayer(slots, id);
+  if (here) { delete slots[here]; return here; }        // tap a player on the pitch: take them off
+  const target = sel && SLOTS.some(sl => sl.id === sel)
+    ? sel
+    : SLOTS.map(sl => sl.id).find(sid => !slots[sid]);  // no selection: drop into an empty spot
+  if (!target) return null;
+  slots[target] = id;
+  return null;
+}
+
+const editSlots = () => (state.game.nextOverride || {}).slots || {};
+function tapSlot(slotId) {
+  const g = state.game;
+  if (!g.nextOverride) return;
+  g.editSel = slotTap(g.nextOverride.slots, g.editSel, slotId);
   save(); renderGame();
 }
-// Field count after the next sub vs. what it should be; null when fine
-function overrideProblem(fc) {
+function tapBench(id) {
   const g = state.game;
-  if (!fc || !fc.next || !fc.next.manual) return null;
-  const ids = fc.ids, onNow = ids.filter(id => g.players[id].onField).length;
-  const after = onNow - fc.next.diff.off.length + fc.next.diff.on.length;
-  const want = Math.min(ON_FIELD, ids.length);
-  if (after === want) return null;
-  const d = after - want;
-  return d > 0 ? 'That puts ' + after + ' on the field — mark ' + d + ' more off' : 'Only ' + after + ' on the field — mark ' + (-d) + ' more on';
+  if (!g.nextOverride) return;
+  g.editSel = benchTap(g.nextOverride.slots, g.editSel, id);
+  save(); renderGame();
 }
 
-function setGk(id) {
+// Spots filled vs. spots that should be filled; null when fine
+function overrideProblem(fc) {
   const g = state.game;
-  if (!g || !g.players[id] || !g.players[id].onField) return;
-  g.gk = id;
-  if (g.phase === 'h1') g.h1gk = id;
-  resyncSlots();
-  logLineup();
-  save();
-  renderGame();
+  if (!fc || !fc.next || !fc.next.manual || fc.next.fromPlan) return null;
+  const ov = g.nextOverride;
+  if (!ov || ov.block !== fc.next.block.index) return null;
+  const filled = Object.keys(ov.slots).filter(sid => ov.slots[sid]).length;
+  const want = Math.min(ON_FIELD, fc.ids.length);
+  if (filled === want) return null;
+  return filled > want
+    ? 'That puts ' + filled + ' on the field, not ' + want
+    : (want - filled) + ' position' + (want - filled === 1 ? '' : 's') + ' still empty';
 }
+
 
 // ---------- Attendance modal (mid-game) ----------
 function renderModal() {
@@ -1389,6 +1520,126 @@ function togglePos(p, posId) {
   p.prefs = p.prefs.includes(posId) ? p.prefs.filter(x => x !== posId) : p.prefs.concat(posId);
   p.gk = p.prefs.includes('GK');
   if (!p.gk && state.startGk === p.id) state.startGk = null;
+}
+
+// ---------- Game plans ----------
+const activePlan = () => state.plans.find(p => p.id === state.activePlanId) || null;
+const planById = id => state.plans.find(p => p.id === id) || null;
+const planBlockLen = pl => blockLen(pl.subsPerHalf);
+
+// Who a plan uses, and how today's attendance compares
+function planFit(pl) {
+  const inPlan = [];
+  pl.blocks.forEach(b => Object.values(b.slots || {}).forEach(id => { if (!inPlan.includes(id)) inPlan.push(id); }));
+  const here = presentIds();
+  return {
+    inPlan,
+    missing: inPlan.filter(id => !here.includes(id)),   // in the plan but not here today
+    extra: here.filter(id => !inPlan.includes(id)),     // here today but not in the plan
+  };
+}
+
+// Minutes each player gets from a set of blocks
+function planMinutes(blocks, S) {
+  const L = blockLen(S), out = {};
+  blocks.forEach(b => Object.values(b.slots || {}).forEach(id => { out[id] = (out[id] || 0) + L; }));
+  return out;
+}
+
+function newDraft(fromPlan) {
+  if (fromPlan) {
+    state.draft = {
+      id: fromPlan.id, name: fromPlan.name, subsPerHalf: fromPlan.subsPerHalf,
+      blocks: fromPlan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
+      block: 0, sel: null,
+    };
+  } else {
+    const plan = planFrom(kickoffPlanInputs());
+    state.draft = {
+      id: null, name: '', subsPerHalf: state.subsPerHalf,
+      blocks: plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
+      block: 0, sel: null,
+    };
+  }
+  save();
+}
+
+// Re-run the planner for every block after `from`, seeded with the blocks already set
+function autoFillFrom(from) {
+  const d = state.draft;
+  const S = d.subsPerHalf;
+  const ids = presentIds();
+  const kept = d.blocks.filter(b => b.index <= from);
+  const minutes = seedMinutes(ids);
+  const pm = seasonPosMins(ids);
+  const L = blockLen(S);
+  kept.forEach(b => Object.keys(b.slots).forEach(sid => {
+    const pid = b.slots[sid];
+    minutes[pid] = (minutes[pid] || 0) + L;
+    const grp = slotById(sid).pos;
+    pm[pid] = pm[pid] || {}; pm[pid][grp] = (pm[pid][grp] || 0) + L;
+  }));
+  const last = kept[kept.length - 1];
+  const rest = planFrom({
+    ids, S, minutes, fromBlock: from + 1,
+    onField: Object.values(last.slots), gk: last.slots.GK,
+    h1gk: kept.find(b => b.index <= S) ? kept[0].slots.GK : null,
+    played: Object.keys(minutes).filter(id => minutes[id] > (seedMinutes(ids)[id] || 0)),
+    gkEligible: gkEligibleSet(), prefsOf, posMins: pm, prevSlots: last.slots,
+  });
+  d.blocks = kept.concat(rest.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })));
+  save();
+}
+
+function renderPlanner() {
+  const d = state.draft;
+  if (!d) return;
+  const S = d.subsPerHalf, L = blockLen(S);
+  const ids = presentIds();
+  $('planner-title').textContent = d.name || 'New game plan';
+  $('planner-tabs').innerHTML = d.blocks.map(b => {
+    const inHalf = b.index * L - (b.index > S ? HALF_MIN : 0);
+    return '<button class="tab' + (b.index === d.block ? ' on' : '') + (b.index === S + 1 ? ' half' : '') +
+      '" data-block="' + b.index + '">' + (b.index === 0 ? 'H1 ' : b.index === S + 1 ? 'H2 ' : '') +
+      fmtClock(inHalf) + '</button>';
+  }).join('');
+  const cur = d.blocks.find(b => b.index === d.block) || d.blocks[0];
+  const water = waterBreakInHalf(S);
+  const inHalf = cur.index * L - (cur.index > S ? HALF_MIN : 0);
+  $('planner-when').textContent = 'Block ' + (cur.index + 1) + ' of ' + d.blocks.length + ' — ' +
+    (cur.index > S ? '2nd half ' : '1st half ') + fmtClock(inHalf) + ' to ' + fmtClock(inHalf + L) +
+    (Math.abs(inHalf - water) < 1e-6 ? ' (water break)' : '');
+  const onNow = Object.values(cur.slots);
+  const benchIds = ids.filter(id => !onNow.includes(id));
+  paintPitch($('planner-pitch'), cur.slots, { bench: benchIds, selected: d.sel, sub: () => '' });
+
+  const mins = planMinutes(d.blocks, S);
+  const vals = ids.map(id => mins[id] || 0);
+  const gap = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+  $('planner-gap').textContent = 'gap ' + fmtClock(gap);
+  const sorted = ids.slice().sort((a, c) => (mins[c] || 0) - (mins[a] || 0));
+  $('planner-mins').innerHTML = '<tr><th>Player</th><th>Minutes</th></tr>' + sorted.map(id =>
+    '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
+  $('btn-planner-delete').hidden = !d.id;
+}
+
+function savePlan() {
+  const d = state.draft;
+  if (!d) return;
+  const name = (d.name || '').trim() || prompt('Name this plan', 'Game plan ' + (state.plans.length + 1));
+  if (!name) return;
+  d.name = name.trim().slice(0, 40);
+  const rec = {
+    id: d.id || 'pl' + Date.now(), name: d.name, subsPerHalf: d.subsPerHalf,
+    playerIds: presentIds().slice(),
+    blocks: d.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
+    savedAt: new Date().toISOString().slice(0, 10),
+  };
+  const at = state.plans.findIndex(p => p.id === rec.id);
+  if (at >= 0) state.plans[at] = rec; else state.plans.push(rec);
+  d.id = rec.id;
+  state.activePlanId = rec.id;
+  save();
 }
 
 // ---------- Summary ----------
@@ -1660,6 +1911,52 @@ $('btn-start').addEventListener('click', () => {
   renderGame();
 });
 $('btn-season').addEventListener('click', () => { renderSeason(); show('season'); });
+// ---- game plans ----
+$('plan-list').addEventListener('click', e => {
+  const li = e.target.closest('[data-plan]');
+  if (!li) return;
+  const pl = planById(li.dataset.plan);
+  if (!pl) return;
+  state.activePlanId = pl.id;
+  newDraft(pl);
+  save(); renderPlanner(); show('planner');
+});
+$('btn-plan-new').addEventListener('click', () => {
+  if (presentIds().length < ON_FIELD) { alert('Mark at least ' + ON_FIELD + ' players here before building a plan.'); return; }
+  newDraft(null); renderPlanner(); show('planner');
+});
+$('btn-plan-clear').addEventListener('click', () => { state.activePlanId = null; save(); renderSetup(); });
+$('btn-planner-back').addEventListener('click', () => { renderSetup(); show('setup'); });
+$('btn-planner-rename').addEventListener('click', () => {
+  const d = state.draft; if (!d) return;
+  const n = prompt('Name this plan', d.name || '');
+  if (n && n.trim()) { d.name = n.trim().slice(0, 40); save(); renderPlanner(); }
+});
+$('planner-tabs').addEventListener('click', e => {
+  const b = e.target.closest('[data-block]');
+  if (!b) return;
+  state.draft.block = +b.dataset.block; state.draft.sel = null;
+  save(); renderPlanner();
+});
+$('planner-pitch').addEventListener('click', e => {
+  const d = state.draft; if (!d) return;
+  const cur = d.blocks.find(b => b.index === d.block);
+  const spot = e.target.closest('[data-slot]');
+  const chip = e.target.closest('[data-bench]');
+  if (spot) d.sel = slotTap(cur.slots, d.sel, spot.dataset.slot);
+  else if (chip) d.sel = benchTap(cur.slots, d.sel, chip.dataset.bench);
+  else return;
+  save(); renderPlanner();
+});
+$('btn-planner-fill').addEventListener('click', () => { autoFillFrom(state.draft.block); renderPlanner(); });
+$('btn-planner-save').addEventListener('click', () => { savePlan(); renderSetup(); show('setup'); });
+$('btn-planner-delete').addEventListener('click', () => {
+  const d = state.draft;
+  if (!d || !d.id || !confirm('Delete this plan?')) return;
+  state.plans = state.plans.filter(p => p.id !== d.id);
+  if (state.activePlanId === d.id) state.activePlanId = null;
+  state.draft = null; save(); renderSetup(); show('setup');
+});
 $('btn-season-back').addEventListener('click', () => { renderSetup(); show('setup'); });
 $('game-list').addEventListener('click', e => {
   const li = e.target.closest('[data-game]');
@@ -1692,6 +1989,14 @@ $('btn-clock').addEventListener('click', () => {
   if (g.running) pauseClock(); else startClock();
   renderGame();
 });
+$('btn-break').addEventListener('click', () => {
+  const g = state.game;
+  if (!g) return;
+  if (g.phase === 'halftime') playOn();
+  else if (g.breakLabel) startClock();
+  else takeBreak('Water break');
+  renderGame();
+});
 $('btn-end').addEventListener('click', () => { if (confirm('End the game now?')) endGame(); });
 $('btn-attendance').addEventListener('click', () => { renderModal(); $('modal').hidden = false; });
 $('modal-close').addEventListener('click', () => { $('modal').hidden = true; });
@@ -1703,8 +2008,14 @@ $('banner-apply').addEventListener('click', () => { applyPending(); renderGame()
 $('banner-dismiss').addEventListener('click', () => { state.game.pending = null; save(); renderGame(); });
 $('clock-preview').addEventListener('click', e => {
   const g = state.game;
-  if (e.target.id === 'btn-edit-done') { g.editNext = false; g.editSel = null; save(); renderGame(); }
-  else if (e.target.id === 'btn-edit-reset') { g.nextOverride = null; g.editSel = null; save(); startEditNext(); }
+  if (e.target.id === 'btn-edit-done') { g.nextOverride = null; g.editNext = false; g.editSel = null; save(); renderGame(); }
+  else if (e.target.id === 'btn-edit-reset') {
+    const fc0 = liveForecast();
+    g.nextOverride = null; g.editSel = null;
+    startEditNext();
+    if (fc0 && fc0.next) { g.nextOverride.slots = Object.assign({}, fc0.next.block.slots); save(); renderGame(); }
+  }
+  else if (e.target.id === 'btn-edit-stage') { g.editNext = false; g.editSel = null; save(); renderGame(); }
   else if (e.target.id === 'btn-sub-now') subNow();
 });
 $('btn-edit-mode').addEventListener('click', () => {
@@ -1719,12 +2030,12 @@ $('btn-live-plan').addEventListener('click', () => {
   renderGame();
 });
 $('btn-suggest').addEventListener('click', () => { state.game.pending = adHocSuggestion(); save(); renderGame(); });
-['field-list', 'bench-list'].forEach(id => $(id).addEventListener('click', e => {
-  const gk = e.target.closest('[data-gk]');
-  if (gk) { setGk(gk.dataset.gk); return; }
-  const li = e.target.closest('[data-id]');
-  if (li) onPlayerTap(li.dataset.id);
-}));
+$('pitch-wrap').addEventListener('click', e => {
+  const spot = e.target.closest('[data-slot]');
+  if (spot) { onPitchTap('slot', spot.dataset.slot); return; }
+  const chip = e.target.closest('[data-bench]');
+  if (chip) onPitchTap('bench', chip.dataset.bench);
+});
 
 $('btn-save').addEventListener('click', () => { saveToSeason(); renderSetup(); show('setup'); });
 $('btn-discard').addEventListener('click', () => {

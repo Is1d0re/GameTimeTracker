@@ -191,8 +191,8 @@ table.plan th.now { color: var(--pitch-deep); }
 .clock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .clock-actions button { white-space: nowrap; }
 .clock-actions .link { flex: 0 0 auto; }
-.clock-actions .primary { flex: 2 1 auto; background: #fff; border-color: #fff; color: var(--pitch-deep); font-family: var(--display); font-size: 20px; font-weight: 800; }
-.clock-actions .secondary { flex: 1 1 auto; background: transparent; border-color: rgba(255,255,255,.7); color: #fff; }
+.clock-actions .primary { flex: 1 1 42%; background: #fff; border-color: #fff; color: var(--pitch-deep); font-family: var(--display); font-size: 20px; font-weight: 800; }
+.clock-actions .secondary { flex: 1 1 30%; font-size: 14px; min-height: 42px; padding: 0 10px; background: transparent; border-color: rgba(255,255,255,.7); color: #fff; }
 .clock-actions .link { color: #ffd6dc; }
 .clock.paused #clock-time { opacity: .55; }
 .clock.halftime { background: var(--board-black); }
@@ -225,53 +225,61 @@ table.plan th.now { color: var(--pitch-deep); }
 .board.editing .board-strip button.link { color: #fff; min-height: 36px; }
 .board.editing .board-strip #btn-edit-done { background: #fff; color: var(--pitch-deep); border-radius: 4px; padding: 0 14px; text-decoration: none; }
 
-/* ---- team sheet columns ---- */
-.columns { display: flex; gap: 10px; }
-.col { flex: 1 1 0; min-width: 0; overflow: hidden; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 8px 8px; }
-.col h3 { padding: 0 4px; display: flex; justify-content: space-between; align-items: baseline; }
-.col h3 .muted { font: 600 14px var(--text); }
-.players { list-style: none; margin: 0; padding: 0; }
-.players li {
-  display: grid; grid-template-columns: 1fr auto auto; grid-template-rows: auto auto;
-  column-gap: 8px; row-gap: 2px; align-items: center;
-  min-height: var(--tap); padding: 7px 6px 7px 10px; margin-bottom: 4px;
-  border-radius: 4px; border: 2px solid transparent; border-left: 5px solid var(--line);
-  cursor: pointer; user-select: none;
+/* ---- plan editor ---- */
+.tabs { display: flex; gap: 6px; padding: 2px 0 8px; }
+.tab { flex: 0 0 auto; min-height: 40px; padding: 0 12px; font: 700 14px/1 var(--display); letter-spacing: .03em;
+  background: var(--paper); border: 2px solid var(--line); color: var(--ink-soft); border-radius: 6px; white-space: nowrap; }
+.tab.on { background: var(--pitch); border-color: var(--pitch); color: #fff; }
+.tab.half { margin-left: 10px; box-shadow: -8px 0 0 -6px var(--ink-soft); }
+.roster.games li.on .name { color: var(--pitch-deep); }
+
+/* ---- the pitch ---- */
+.pitch-wrap { margin-bottom: 8px; }
+.pitch {
+  position: relative; aspect-ratio: 1 / 1; width: 100%;
+  border-radius: var(--radius); overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.07) 0 12.5%, transparent 0 25%) 0 0/100% 100%,
+    var(--pitch);
+  border: 2px solid var(--pitch-deep);
 }
-.players .pname { grid-column: 1 / -1; }
-.players .pproj { grid-column: 1; grid-row: 2; }
-.players .pmin { grid-column: 2; grid-row: 2; }
-.players .gkbtn { grid-column: 3; grid-row: 2; }
-.players .etoggle { grid-column: 3; grid-row: 2; }
-.players li.selected { border-color: var(--pitch); border-left-color: var(--pitch); background: var(--pitch-tint); }
-.players li.gk { background: var(--keeper); border-left-color: #b38a00; }
-.players li.behind { background: var(--off-tint); border-left-color: var(--off); }
-.players li.behind.gk { background: var(--keeper); }
-.players .pname { font-weight: 600; min-width: 0; line-height: 1.15; font-size: 17px; overflow-wrap: break-word; }
-.players .pmin { font: 800 20px/1 var(--display); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.players .pproj { font-size: 12px; color: var(--ink-soft); font-weight: 500; line-height: 1.2; }
-.players li.behind .pproj { color: var(--off); font-weight: 700; }
-.players li.gk .pproj { color: #5a4400; }
-.players .gkbtn { min-height: 34px; padding: 0 8px; font: 800 13px/1 var(--display); letter-spacing: .04em; background: var(--paper); border: 2px solid var(--line); color: var(--ink-soft); }
-.players li.gk .gkbtn { background: #000; border-color: #000; color: var(--keeper); }
-.players .gkbtn.static { display: inline-flex; align-items: center; justify-content: center; opacity: .55; }
-.tag-next { display: inline-block; font: 700 12px/1 var(--display); letter-spacing: .04em; padding: 3px 6px; border-radius: 3px; margin-left: 6px; vertical-align: middle; }
-.tag-next.off { background: var(--off); color: #fff; }
-.tag-next.on { background: var(--on); color: #fff; }
-.players li.editing { border-color: var(--line); background: var(--paper); }
-.players li.await .pproj { font-weight: 700; }
-.players li.editing .pproj { color: var(--ink-soft); font-weight: 600; }
-.players .etoggle { width: 30px; height: 30px; border-radius: 50%; border: 2px solid var(--line); display: inline-flex; align-items: center; justify-content: center; font: 800 18px/1 var(--display); color: #fff; }
-.players li.picked-off { background: var(--off); border-color: var(--off); border-left-color: var(--off); color: #fff; }
-.players li.picked-on { background: var(--on); border-color: var(--on); border-left-color: var(--on); color: #fff; }
-.players li.picked-off .pproj, .players li.picked-on .pproj { color: rgba(255,255,255,.9); }
-.players li.picked-off .etoggle, .players li.picked-on .etoggle { background: #fff; border-color: #fff; }
-/* the card waiting to be given a partner */
-.players li.await { outline: 3px dashed var(--pitch); outline-offset: -3px; background: var(--pitch-tint); }
-.players li.await.picked-off, .players li.await.picked-on { outline-color: rgba(255,255,255,.9); }
-.players li.await.picked-off .pproj, .players li.await.picked-on .pproj { color: #fff; }
-.players li.picked-off .etoggle { color: var(--off); }
-.players li.picked-on .etoggle { color: var(--on); }
+/* halfway line and centre circle, so the shape reads as a pitch at a glance */
+.pitch::before, .pitch::after { content: ''; position: absolute; border: 2px solid rgba(255,255,255,.22); }
+.pitch::before { left: 0; right: 0; top: 27%; height: 0; border-width: 2px 0 0; }
+.pitch::after { width: 30%; aspect-ratio: 1; border-radius: 50%; left: 35%; top: 27%; transform: translateY(-50%); }
+.spot {
+  position: absolute; transform: translate(-50%, -50%);
+  width: 27%; min-height: 0; padding: 6px 2px;
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  background: var(--paper); border: 2px solid var(--paper); border-radius: 8px;
+  color: var(--ink); box-shadow: 0 2px 6px rgba(0,0,0,.28);
+}
+.spot .pos { font: 700 10px/1 var(--display); letter-spacing: .06em; color: var(--ink-soft); }
+.spot .who { font: 700 16px/1.05 var(--display); text-align: center; overflow-wrap: anywhere; }
+.spot .sub { font: 600 11px/1 var(--text); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.spot.gk { background: var(--keeper); border-color: var(--keeper); }
+.spot.gk .pos, .spot.gk .sub { color: #5a4400; }
+.spot.empty { background: rgba(255,255,255,.14); border-style: dashed; border-color: rgba(255,255,255,.7); color: #fff; box-shadow: none; }
+.spot.empty .pos, .spot.empty .sub { color: rgba(255,255,255,.8); }
+.spot.behind { border-color: var(--off); }
+.spot.incoming { border-color: var(--on); box-shadow: 0 0 0 3px var(--on); }
+.spot.outgoing { border-color: var(--off); box-shadow: 0 0 0 3px var(--off); }
+.spot.sel { outline: 3px dashed var(--keeper); outline-offset: 3px; z-index: 2; }
+
+.benchbar { display: flex; align-items: stretch; gap: 6px; overflow-x: auto; padding: 8px 0 2px; }
+.blabel { flex: 0 0 auto; align-self: center; font: 700 12px/1.1 var(--display); letter-spacing: .06em; color: var(--ink-soft); width: 42px; }
+.bnone { align-self: center; color: var(--ink-soft); font-size: 14px; }
+.bchip {
+  flex: 0 0 auto; min-width: 84px; min-height: 52px; padding: 6px 8px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  background: var(--paper); border: 2px solid var(--line); border-radius: 8px; color: var(--ink);
+}
+.bchip .who { font: 700 15px/1.05 var(--display); }
+.bchip .sub { font: 600 11px/1 var(--text); color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+.bchip.behind { border-color: var(--off); }
+.bchip.behind .sub { color: var(--off); }
+.bchip.incoming { border-color: var(--on); background: var(--on-tint); }
+.bchip.sel { outline: 3px dashed var(--pitch); outline-offset: 2px; }
 
 /* ---- summary tables ---- */
 table.summary { width: 100%; border-collapse: collapse; font-size: 16px; }

@@ -36,6 +36,17 @@
     <p id="gk-hint" class="hint"></p>
   </div>
 
+  <div class="card">
+    <div class="card-title"><h2>Game plan</h2><span id="plan-active" class="muted"></span></div>
+    <p class="hint">Optional. A saved plan sets who plays which position in every block, and drives the sub alerts on game day.</p>
+    <p id="plan-fit" class="hint"></p>
+    <ul id="plan-list" class="roster games"></ul>
+    <div class="actions tight">
+      <button class="secondary" id="btn-plan-new">New plan</button>
+      <button class="link" id="btn-plan-clear">Use auto</button>
+    </div>
+  </div>
+
   <div class="card" id="starters-card" hidden>
     <div class="card-title">
       <h2>Starters</h2>
@@ -82,6 +93,32 @@
   <p id="start-msg" class="hint center"></p>
 </section>
 
+<!-- ============ PLAN EDITOR ============ -->
+<section id="view-planner" class="view" hidden>
+  <header class="bar">
+    <button class="link" id="btn-planner-back">‹ Back</button>
+    <h1 id="planner-title">Game plan</h1>
+    <button class="link" id="btn-planner-rename">Rename</button>
+  </header>
+  <div class="card">
+    <div class="scroll-x"><div id="planner-tabs" class="tabs"></div></div>
+    <p id="planner-when" class="hint"></p>
+    <div id="planner-pitch" class="pitch-wrap"></div>
+    <p class="hint center">Tap a position, then a bench player to put them there. Tap two positions to swap.</p>
+    <div class="actions tight">
+      <button class="secondary" id="btn-planner-fill">Auto-fill later blocks</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title"><h2>Projected minutes</h2><span id="planner-gap" class="muted"></span></div>
+    <table id="planner-mins" class="summary"></table>
+  </div>
+  <div class="actions">
+    <button class="primary" id="btn-planner-save">Save plan</button>
+    <button class="link danger" id="btn-planner-delete">Delete</button>
+  </div>
+</section>
+
 <!-- ============ GAME ============ -->
 <section id="view-game" class="view" hidden>
   <header class="clock">
@@ -94,6 +131,7 @@
     <div class="timeline"><div id="timeline-fill"></div><div id="timeline-marks"></div></div>
     <div class="clock-actions">
       <button id="btn-clock" class="primary">Start</button>
+      <button id="btn-break" class="secondary">Water break</button>
       <button id="btn-attendance" class="secondary">Attendance</button>
       <button id="btn-end" class="link danger">End game</button>
     </div>
@@ -110,21 +148,12 @@
   </div>
   <div id="clock-preview" class="board quiet" hidden></div>
 
-  <div class="columns">
-    <div class="col">
-      <h3>On field <span id="field-count" class="muted"></span></h3>
-      <ul id="field-list" class="players"></ul>
-    </div>
-    <div class="col">
-      <h3>Bench <span id="bench-count" class="muted"></span></h3>
-      <ul id="bench-list" class="players"></ul>
-      <button id="btn-suggest" class="secondary small">Suggest a sub</button>
-    </div>
-  </div>
-  <p class="hint center" id="game-hint">Tap a bench player, then a field player to swap. Tap GK on a field player to make them keeper.</p>
+  <div id="pitch-wrap" class="pitch-wrap"></div>
+  <p class="hint center" id="game-hint"></p>
 
   <div class="actions">
-    <button class="secondary" id="btn-edit-mode">Edit next sub</button>
+    <button class="secondary" id="btn-edit-mode">Edit lineup</button>
+    <button class="secondary" id="btn-suggest">Suggest a sub</button>
     <button class="secondary" id="btn-live-plan">Show plan</button>
   </div>
   <div class="card" id="live-plan-card" hidden>

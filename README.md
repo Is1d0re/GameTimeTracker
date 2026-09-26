@@ -4,15 +4,16 @@ A phone app for youth soccer coaches that makes equal play time automatic. Works
 
 **What it does**
 
-- Tracks live minutes for every player, sorted so you can see who's behind at a glance
+- Shows the team on a pitch, in position, with live minutes on every player
 - Builds a rotation plan before kickoff based on who showed up (7–11 players) and how often you want to sub
 - Alerts you (buzz + beep) at every sub time with exactly who goes off and on — one tap to apply
 - Rotates the goalkeeper at halftime (and to a third keeper if that keeps minutes even)
 - Puts each player in a position they actually play, and spreads their time across those positions
+- Save game plans in advance — who plays which position in every block — and load one on game day
 - Handles late arrivals and injuries mid-game
 - Remembers who was short-changed so it evens out over the season
 
-Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half.
+Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half. The clock is yours: it stops when you tap **Water break**, pauses at halftime, and **never ends the game by itself** — it runs into stoppage time until you tap **End game**.
 
 Positions: **GK** (1), **CB** (4/5, two slots), **W** (7/11, the two wide slots that cover both back and winger), **CM** (8), **ST** (9).
 
@@ -28,14 +29,15 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 ## Using it on game day
 
 1. **Roster** — tap a name to toggle IN/OUT for today. Tap ✎ to rename. Under each name, toggle the positions that player can play; the plan puts them in one of those and rotates them through the rest. A player with nothing marked can be played anywhere.
-2. **Starters** (optional) — tap up to 7 players to start on the field and pick the starting keeper. Anyone you don't pick is filled in by the plan.
-3. **Subs per half** — how many times you want to swap kids in each half. More subs = shorter shifts (better in the heat) and tighter fairness. The schedule and expected minutes update as you change it.
-4. **Show plan** (optional) — the full rotation grid; screenshot it as a backup.
-5. **Start game**, then tap **Start** when the ref blows the whistle. Pause for injuries etc.
-6. When the phone buzzes, the banner shows who goes OFF/ON. Tap **Apply** once the kids have swapped.
-7. To change the lineup, tap **Edit next sub**, then tap players to set who goes off and on. **Sub now** applies it immediately (for an unplanned sub); **Done** holds it for the next whistle. Tap **GK** on a field player to change keeper. Outside edit mode, tapping players does nothing, so a stray tap can't disturb the lineup.
-8. **Attendance** lets you add a late arrival or mark a player out (injured).
-9. At full time, review the summary and tap **Save to season** so next game's plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share, so they aren't "owed" minutes they weren't there for.
+2. **Game plan** (optional) — tap **New plan** to lay out every block on a pitch: tap a position, then a bench player to put them there. **Auto-fill later blocks** lets the app finish the rotation once you've set the blocks you care about. Save it, and on game day tap the plan to use it — it drives every sub alert. If someone in the plan isn't there, the app fills their spots and tells you who it moved.
+3. **Starters** (optional, when no plan is loaded) — tap up to 7 players to start on the field and pick the starting keeper.
+4. **Subs per half** — how many times you want to swap kids in each half. More subs = shorter shifts (better in the heat) and tighter fairness. The schedule and expected minutes update as you change it.
+5. **Show plan** (optional) — the full rotation grid; screenshot it as a backup.
+6. **Start game**, then tap **Start** when the ref blows the whistle. **Water break** stops the clock and labels why; tap **Resume** to restart. At halftime you get **Start 2nd half**, or **Play on** if the ref hasn't blown yet.
+7. When the phone buzzes, the board shows one row per swap — who comes off, the position, who goes on. Tap **Apply** once the kids have swapped.
+8. To change the lineup, tap **Edit lineup**. Tap a position, then a bench player to put them there; tap two positions to swap them. You're setting how the field should look. Then **Sub now** to make it happen immediately, or **Save for 6:15** to hold it for the next whistle. The keeper is simply whoever stands in the GK spot. Outside edit mode tapping does nothing, so a stray tap can't disturb the lineup.
+9. **Attendance** lets you add a late arrival or mark a player out (injured).
+10. When the ref blows, tap **End game**, then review the summary and tap **Save to season** so next game's plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share, so they aren't "owed" minutes they weren't there for.
 
 Minutes in each position appear under every player's name on the game summary, and the **Season** screen has a **Time by position** table for the whole season — a column per position, red where it isn't one the player is marked for. If a player keeps landing somewhere they don't want, mark that position for more of the squad; with only two or three kids marked for a position, someone else has to fill it.
 
