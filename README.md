@@ -13,7 +13,7 @@ A phone app for youth soccer coaches that makes equal play time automatic. Works
 - Handles late arrivals and injuries mid-game
 - Remembers who was short-changed so it evens out over the season
 
-Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half. The clock is yours: it stops when you tap **Water break**, pauses at halftime, and **never ends the game by itself** — it runs into stoppage time until you tap **End game**.
+Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half. The clock runs straight through like a real match — the second half starts at 25:00, not back at 0:00, and keeps going past 50:00 into stoppage time. The clock is yours: it stops when you tap **Water break**, pauses at halftime, and **never ends the game by itself** — it runs into stoppage time until you tap **End game**.
 
 Positions: **GK** (1), **CB** (4/5, two slots), **W** (7/11, the two wide slots that cover both back and winger), **CM** (8), **ST** (9).
 
@@ -29,9 +29,9 @@ Launch it from the home screen icon like any app. It keeps working in airplane m
 ## Using it on game day
 
 1. **Roster** — tap a name to toggle IN/OUT for today. Tap ✎ to rename. Under each name, toggle the positions that player can play; the plan puts them in one of those and rotates them through the rest. A player with nothing marked can be played anywhere.
-2. **Game plan** (optional) — tap **New plan** to lay out every block on a pitch: tap a position, then a bench player to put them there. **Auto-fill later blocks** lets the app finish the rotation once you've set the blocks you care about. Save it, and on game day tap the plan to use it — it drives every sub alert. If someone in the plan isn't there, the app fills their spots and tells you who it moved.
+2. **Game plan** (optional) — tap **New plan** to lay out every block on a pitch: tap a position, then a bench player to put them there. **Subs per half** lives here, since it sets the block boundaries; changing it re-blocks the plan and keeps your starting eleven. **Auto-fill later blocks** lets the app finish the rotation once you've set the blocks you care about. Save it, and on game day tap the plan to use it — it drives every sub alert. If someone in the plan isn't there, the app fills their spots and tells you who it moved.
 3. **Starters** (optional, when no plan is loaded) — tap up to 7 players to start on the field and pick the starting keeper.
-4. **Subs per half** — how many times you want to swap kids in each half. More subs = shorter shifts (better in the heat) and tighter fairness. The schedule and expected minutes update as you change it.
+4. **Subs per half** — shown only when no plan is selected (a plan carries its own). More subs = shorter shifts, better in the heat, and tighter fairness. The schedule and expected minutes update as you change it.
 5. **Show plan** (optional) — the full rotation grid; screenshot it as a backup.
 6. **Start game**, then tap **Start** when the ref blows the whistle. **Water break** stops the clock and labels why; tap **Resume** to restart. At halftime you get **Start 2nd half**, or **Play on** if the ref hasn't blown yet.
 7. When the phone buzzes, the board shows one row per swap — who comes off, the position, who goes on. Tap **Apply** once the kids have swapped.

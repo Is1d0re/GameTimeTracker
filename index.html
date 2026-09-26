@@ -65,7 +65,7 @@
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="subs-card">
     <h2>Subs per half</h2>
     <div class="stepper">
       <button id="subs-minus" aria-label="Fewer subs">−</button>
@@ -74,6 +74,9 @@
     </div>
     <p id="subs-schedule" class="hint"></p>
     <p id="subs-fairness" class="hint"></p>
+  </div>
+
+  <div class="card">
     <label class="check"><input type="checkbox" id="use-carry"> Balance against previous games (season carry-over)</label>
   </div>
 
@@ -100,6 +103,16 @@
     <h1 id="planner-title">Game plan</h1>
     <button class="link" id="btn-planner-rename">Rename</button>
   </header>
+  <div class="card">
+    <h2>Subs per half</h2>
+    <div class="stepper">
+      <button id="psubs-minus" aria-label="Fewer subs">−</button>
+      <span id="psubs-value">3</span>
+      <button id="psubs-plus" aria-label="More subs">+</button>
+    </div>
+    <p id="psubs-schedule" class="hint"></p>
+  </div>
+
   <div class="card">
     <div class="scroll-x"><div id="planner-tabs" class="tabs"></div></div>
     <p id="planner-when" class="hint"></p>

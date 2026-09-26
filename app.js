@@ -108,6 +108,13 @@ function subTimesInHalf(S) {
   return Array.from({ length: S }, (_, k) => (k + 1) * L);
 }
 // water break snapped to the nearest scheduled sub time in the half
+// Is this block boundary a water break? (one per half, in continuous game time)
+function isWaterBlock(start, S) {
+  const w = waterBreakInHalf(S);
+  return Math.abs(start - w) < 1e-6 || Math.abs(start - (HALF_MIN + w)) < 1e-6;
+}
+const waterTimes = S => [waterBreakInHalf(S), HALF_MIN + waterBreakInHalf(S)];
+
 function waterBreakInHalf(S) {
   const target = HALF_MIN / 2;
   return subTimesInHalf(S).reduce((best, t) =>
@@ -123,6 +130,8 @@ function fmtClock(min) {
   return m + ':' + String(s).padStart(2, '0');
 }
 function fmtMin(min) { return fmtClock(min); }
+// Game time runs straight through: the second half starts at 25:00, not back at 0:00
+const atClock = min => fmtClock(min);
 
 // ============================================================
 // Slot assignment
@@ -382,7 +391,7 @@ function newGame() {
     running: false,
     elapsedMs: 0,
     runningSince: null,
-    subsPerHalf: state.subsPerHalf,
+    subsPerHalf: (activePlan() || state).subsPerHalf,
     players, gk: null, h1gk: null, h2gk: null,
     lastAlertBlock: 0,
     pending: null,
@@ -936,11 +945,13 @@ function renderSetup() {
   $('subs-value').textContent = S;
   $('subs-minus').disabled = S <= MIN_SUBS;
   $('subs-plus').disabled = S >= MAX_SUBS;
-  const times = subTimesInHalf(S);
-  const water = waterBreakInHalf(S);
-  $('subs-schedule').textContent = 'Subs at ' + times.map(t => fmtClock(t) + (t === water ? ' (water break)' : '')).join(', ') +
-    ' in each half. Shifts of ' + fmtClock(blockLen(S)) + '.';
+  const all = [];
+  for (let i = 1; i < blockCount(S); i++) all.push(blockStart(S, i));
+  $('subs-schedule').textContent = 'Subs at ' + all.map(t =>
+    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t) + (isWaterBlock(t, S) ? ' (water)' : '')).join(', ') +
+    '. Shifts of ' + fmtClock(blockLen(S)) + '.';
   renderPlans();
+  $('subs-card').hidden = !!activePlan();
   renderStarters();
 
   if (n >= ON_FIELD) {
@@ -1023,17 +1034,13 @@ function renderStarters() {
 
 // Shared renderers for a list of plan blocks (setup preview and in-game forecast)
 function blockLabel(b, S) {
-  const inHalf = b.start - (b.half === 2 ? HALF_MIN : 0);
-  return { inHalf, when: b.index === S + 1 ? 'Halftime' : 'H' + b.half + ' ' + fmtClock(inHalf) };
+  return { at: b.start, when: b.index === S + 1 ? 'Halftime' : atClock(b.start) };
 }
 function planGridHtml(ids, blocks, S, totals, currentIndex) {
-  const water = waterBreakInHalf(S);
   let html = '<tr><th></th>';
   blocks.forEach(b => {
-    const { inHalf } = blockLabel(b, S);
     html += '<th class="' + (b.index === S + 1 ? 'half-start ' : '') + (b.index === currentIndex ? 'now' : '') + '">' +
-      (b.index === 0 ? 'H1 ' : b.index === S + 1 ? 'H2 ' : '') + fmtClock(inHalf) +
-      (Math.abs(inHalf - water) < 1e-6 ? ' 💧' : '') + '</th>';
+      atClock(b.start) + (b.index === S + 1 ? ' HT' : isWaterBlock(b.start, S) ? ' 💧' : '') + '</th>';
   });
   html += '<th>Total</th></tr>';
   ids.forEach(id => {
@@ -1102,12 +1109,10 @@ function boardPanelsHtml(d, extra, newSlots, oldSlots) {
     (foot ? '<div class="board-foot">' + foot + '</div>' : '');
 }
 function planSwapsHtml(blocks, S) {
-  const water = waterBreakInHalf(S);
   let html = '<li><b>Keepers:</b> ' + [...new Set(blocks.map(b => b.gk))].map(nameOf).map(esc).join(' → ') + '</li>';
   for (let i = 1; i < blocks.length; i++) {
     const prev = blocks[i - 1], b = blocks[i];
-    const { inHalf, when } = blockLabel(b, S);
-    html += '<li><b>' + when + '</b>' + (Math.abs(inHalf - water) < 1e-6 ? ' 💧' : '') + ' — ' +
+    html += '<li><b>' + blockLabel(b, S).when + '</b>' + (isWaterBlock(b.start, S) ? ' 💧' : '') + ' — ' +
       swapLineHtml(diffLineups(prev.on, prev.gk, b)) + '</li>';
   }
   return html;
@@ -1215,7 +1220,7 @@ function renderGame() {
   if (!g) return;
   const S = g.subsPerHalf;
   const min = elapsedMin();
-  const inHalf = g.phase === 'h1' ? min : g.phase === 'halftime' ? HALF_MIN : min - HALF_MIN;
+  const shownMin = g.phase === 'halftime' ? HALF_MIN : min;
   const b = currentBlock(g);
   const fullTime = g.phase === 'h2' && min >= GAME_MIN;
   const overHalf = g.phase === 'h1' && min >= HALF_MIN;
@@ -1224,7 +1229,7 @@ function renderGame() {
   clock.classList.toggle('paused', !g.running && g.phase !== 'halftime');
   clock.classList.toggle('halftime', g.phase === 'halftime' || !!g.breakLabel);
   // The clock keeps counting past regulation; the pill says so
-  $('clock-time').textContent = fmtClock(inHalf).padStart(5, '0');
+  $('clock-time').textContent = fmtClock(shownMin).padStart(5, '0');
   $('clock-half').textContent = g.phase === 'done' ? 'Final'
     : g.breakLabel ? g.breakLabel
     : g.phase === 'halftime' ? 'Halftime'
@@ -1256,14 +1261,11 @@ function renderGame() {
   if (marks.dataset.s !== String(S)) {
     marks.dataset.s = String(S);
     marks.innerHTML = '';
-    const water = waterBreakInHalf(S);
     for (let i = 1; i < blockCount(S); i++) {
       const t = blockStart(S, i);
       const half = Math.abs(t - HALF_MIN) < 1e-6;
-      const inH = t - (t >= HALF_MIN ? HALF_MIN : 0);
-      const isWater = !half && Math.abs(inH - water) < 1e-6;
       const sp = document.createElement('span');
-      sp.className = half ? 'half' : isWater ? 'water' : '';
+      sp.className = half ? 'half' : isWaterBlock(t, S) ? 'water' : '';
       sp.style.left = (t / GAME_MIN * 100) + '%';
       marks.appendChild(sp);
     }
@@ -1287,7 +1289,7 @@ function renderGame() {
     $('banner-title').textContent = p.title;
     const pb = p.block != null ? p.block : b;
     $('banner').querySelector('.board-strip .muted').textContent = pb === S + 1 ? 'before the 2nd half' :
-      'H' + (pb <= S ? 1 : 2) + ' ' + fmtClock(blockStart(S, pb) - (pb > S ? HALF_MIN : 0));
+      atClock(blockStart(S, pb));
     // An edited sub can leave the wrong number on the field; never let Apply commit that
     const onNow = ids.filter(id => g.players[id].onField).length;
     const after = onNow - p.off.length + p.on.length;
@@ -1324,7 +1326,7 @@ function renderGame() {
   const previewEl = $('clock-preview');
   const problem = overrideProblem(fc);
   const canEdit = !!next && g.phase !== 'done';
-  const whenLabel = next ? (next.block.index === S + 1 ? 'at halftime' : 'at ' + fmtClock(next.block.start - (next.block.half === 2 ? HALF_MIN : 0)) + (next.block.half === 2 ? ' (2nd half)' : '')) : '';
+  const whenLabel = next ? (next.block.index === S + 1 ? 'at halftime' : 'at ' + atClock(next.block.start)) : '';
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
@@ -1597,18 +1599,25 @@ function renderPlanner() {
   const S = d.subsPerHalf, L = blockLen(S);
   const ids = presentIds();
   $('planner-title').textContent = d.name || 'New game plan';
+  $('psubs-value').textContent = S;
+  $('psubs-minus').disabled = S <= MIN_SUBS;
+  $('psubs-plus').disabled = S >= MAX_SUBS;
+  const times = [];
+  for (let i = 1; i < blockCount(S); i++) times.push(blockStart(S, i));
+  $('psubs-schedule').textContent = 'Subs at ' + times.map(t =>
+    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t) + (isWaterBlock(t, S) ? ' (water)' : '')).join(', ') +
+    '. Shifts of ' + fmtClock(blockLen(S)) + '.';
   $('planner-tabs').innerHTML = d.blocks.map(b => {
-    const inHalf = b.index * L - (b.index > S ? HALF_MIN : 0);
+    const at = b.index * L;
     return '<button class="tab' + (b.index === d.block ? ' on' : '') + (b.index === S + 1 ? ' half' : '') +
-      '" data-block="' + b.index + '">' + (b.index === 0 ? 'H1 ' : b.index === S + 1 ? 'H2 ' : '') +
-      fmtClock(inHalf) + '</button>';
+      '" data-block="' + b.index + '">' + atClock(at) +
+      (b.index === S + 1 ? ' HT' : isWaterBlock(at, S) ? ' 💧' : '') + '</button>';
   }).join('');
   const cur = d.blocks.find(b => b.index === d.block) || d.blocks[0];
-  const water = waterBreakInHalf(S);
-  const inHalf = cur.index * L - (cur.index > S ? HALF_MIN : 0);
+  const at = cur.index * L;
   $('planner-when').textContent = 'Block ' + (cur.index + 1) + ' of ' + d.blocks.length + ' — ' +
-    (cur.index > S ? '2nd half ' : '1st half ') + fmtClock(inHalf) + ' to ' + fmtClock(inHalf + L) +
-    (Math.abs(inHalf - water) < 1e-6 ? ' (water break)' : '');
+    atClock(at) + ' to ' + atClock(at + L) + ' (' + (cur.index > S ? '2nd half' : '1st half') + ')' +
+    (cur.index === S + 1 ? ', from halftime' : isWaterBlock(at, S) ? ', water break' : '');
   const onNow = Object.values(cur.slots);
   const benchIds = ids.filter(id => !onNow.includes(id));
   paintPitch($('planner-pitch'), cur.slots, { bench: benchIds, selected: d.sel, sub: () => '' });
@@ -1621,6 +1630,21 @@ function renderPlanner() {
   $('planner-mins').innerHTML = '<tr><th>Player</th><th>Minutes</th></tr>' + sorted.map(id =>
     '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
   $('btn-planner-delete').hidden = !d.id;
+}
+
+// Changing subs per half changes the block boundaries, so the plan is rebuilt around the
+// starting lineup the coach already chose.
+function setDraftSubs(S) {
+  const d = state.draft;
+  if (!d || S < MIN_SUBS || S > MAX_SUBS) return;
+  const ids = presentIds();
+  const first = d.blocks[0] ? Object.values(d.blocks[0].slots).filter(id => ids.includes(id)) : [];
+  const gk0 = d.blocks[0] && ids.includes(d.blocks[0].slots.GK) ? d.blocks[0].slots.GK : null;
+  d.subsPerHalf = S;
+  d.block = 0; d.sel = null;
+  const plan = planFrom(Object.assign(kickoffPlanInputs(), { S, starters: first, h1gk: gk0 }));
+  d.blocks = plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
+  save();
 }
 
 function savePlan() {
@@ -1833,8 +1857,7 @@ function renderGameDetail(key) {
     if (i === 0) return '<li><b>Kickoff</b> — ' + e.on.map(name).map(esc).join(', ') + (e.gk ? ' · GK ' + esc(name(e.gk)) : '') + '</li>';
     const prev = log[i - 1];
     const d = { off: prev.on.filter(id => !e.on.includes(id)), on: e.on.filter(id => !prev.on.includes(id)), gk: e.gk !== prev.gk ? e.gk : null };
-    const when = e.t >= HALF_MIN ? 'H2 ' + fmtClock(e.t - HALF_MIN) : 'H1 ' + fmtClock(e.t);
-    return '<li><b>' + (Math.abs(e.t - HALF_MIN) < 1e-6 ? 'Halftime' : when) + '</b> — ' + swapLineHtml(d) + '</li>';
+    return '<li><b>' + (Math.abs(e.t - HALF_MIN) < 1e-6 ? 'Halftime' : atClock(e.t)) + '</b> — ' + swapLineHtml(d) + '</li>';
   }).join('') || '<li class="muted">No subs recorded.</li>';
   // Planned grid (what the app suggested before kickoff)
   const plan = (h.plan || []).map(b => ({ index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on: b.on, gk: b.gk, slots: b.slots || {}, bench: [] }));
@@ -1948,6 +1971,8 @@ $('planner-pitch').addEventListener('click', e => {
   else return;
   save(); renderPlanner();
 });
+$('psubs-minus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf - 1); renderPlanner(); });
+$('psubs-plus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf + 1); renderPlanner(); });
 $('btn-planner-fill').addEventListener('click', () => { autoFillFrom(state.draft.block); renderPlanner(); });
 $('btn-planner-save').addEventListener('click', () => { savePlan(); renderSetup(); show('setup'); });
 $('btn-planner-delete').addEventListener('click', () => {
