@@ -602,6 +602,17 @@ function currentBlock(g) {
   return Math.min(b, blockCount(S) - 1);
 }
 
+// Where we are among the columns of "Plan from here". An off-plan sub inside a block
+// adds a column, so both the position and the total grow.
+function blockCounter(g) {
+  const S = g.subsPerHalf;
+  const splits = (g.log || []).filter(e =>
+    e.slots && e.offPlan && e.t > blockStart(S, blockAt(S, e.t)) + 1e-6);
+  const b = currentBlock(g);
+  const before = splits.filter(e => e.t <= elapsedMin() + 1e-6).length;
+  return { at: b + 1 + before, total: blockCount(S) + splits.length };
+}
+
 const playedIds = ids => ids.filter(id => playedMs(id) > 0);
 // Position minutes so far: this game plus the season, so the plan keeps spreading positions
 function livePosMins(ids) {
@@ -1186,7 +1197,8 @@ function renderGame() {
     : fullTime ? 'Full time'
     : overHalf ? '1st half +'
     : g.phase === 'h1' ? '1st half' : '2nd half';
-  $('clock-block').textContent = g.phase === 'done' ? '' : 'Block ' + (b + 1) + '/' + blockCount(S);
+  const col = blockCounter(g);
+  $('clock-block').textContent = g.phase === 'done' ? '' : 'Block ' + col.at + '/' + col.total;
 
   const nextEl = $('clock-next');
   nextEl.classList.remove('soon');
@@ -1281,7 +1293,7 @@ function renderGame() {
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
     setHtml(previewEl, '<div class="board-strip"><span>Editing lineup</span>' +
-      '<span class="edit-actions"><button class="link" id="btn-edit-reset">Use plan</button><button class="link" id="btn-edit-done">Cancel</button></span></div>' +
+      '<span class="edit-actions"><button class="link" id="btn-edit-reset">Reset to plan</button><button class="link" id="btn-edit-done">Cancel</button></span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
       '<button class="secondary" id="btn-edit-stage"' + (problem || !hasChange ? ' disabled' : '') + '>Save for ' + esc(whenLabel.replace(/^at /, '')) + '</button></div>');
@@ -1348,6 +1360,12 @@ function renderGame() {
   } else {
     lateEl.hidden = true;
   }
+  const reb = $('btn-rebalance');
+  reb.hidden = !g.followPlan || g.phase === 'done' || editing;
+  const rebDone = g.rebalancedAt === (g.log || []).length;
+  reb.classList.toggle('done', rebDone);
+  reb.innerHTML = rebDone ? '<span class="tick">✓</span> Rebalanced' : 'Rebalance plan';
+  reb.disabled = currentBlock(g) >= blockCount(S) - 1;
   $('game-hint').textContent = editing
     ? 'Tap a position, then a bench player to put them there. Tap two positions to swap.'
     : 'Tap Edit lineup to change positions or make an unplanned sub.';
@@ -1521,6 +1539,7 @@ function replanRemaining() {
   g.arrival = null;
   g.pending = null;
   g.nextOverride = null;
+  g.rebalancedAt = (g.log || []).length;   // remembered until the next off-plan change
   save();
 }
 
@@ -2034,6 +2053,9 @@ $('btn-break').addEventListener('click', () => {
   else takeBreak('Water break');
   renderGame();
 });
+$('btn-rebalance').addEventListener('click', () => {
+  if (confirm('Even out the rest of the plan from the minutes played so far?')) { replanRemaining(); renderGame(); }
+});
 $('btn-end').addEventListener('click', () => { if (confirm('End the game now?')) endGame(); });
 $('btn-attendance').addEventListener('click', () => { renderModal(); $('modal').hidden = false; });
 $('modal-close').addEventListener('click', () => { $('modal').hidden = true; });
@@ -2053,10 +2075,14 @@ $('clock-preview').addEventListener('click', e => {
   const g = state.game;
   if (e.target.id === 'btn-edit-done') { g.nextOverride = null; g.editNext = false; g.editSel = null; save(); renderGame(); }
   else if (e.target.id === 'btn-edit-reset') {
-    const fc0 = liveForecast();
+    // Drop the edits first, so the forecast comes back with the plan's lineup and not our own
     g.nextOverride = null; g.editSel = null;
+    const planned = liveForecast();
     startEditNext();
-    if (fc0 && fc0.next) { g.nextOverride.slots = Object.assign({}, fc0.next.block.slots); save(); renderGame(); }
+    if (planned && planned.next && g.nextOverride) {
+      g.nextOverride.slots = Object.assign({}, planned.next.block.slots);
+    }
+    save(); renderGame();
   }
   else if (e.target.id === 'btn-edit-stage') { g.editNext = false; g.editSel = null; save(); renderGame(); }
   else if (e.target.id === 'btn-sub-now') subNow();

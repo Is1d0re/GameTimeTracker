@@ -105,18 +105,16 @@
 <!-- ============ GAME ============ -->
 <section id="view-game" class="view" hidden>
   <header class="clock">
-    <div class="clock-row">
+    <div class="clock-meta">
       <span id="clock-half" class="pill">1st half</span>
-      <span id="clock-time">00:00</span>
       <span id="clock-block" class="pill"></span>
     </div>
+    <div id="clock-time">00:00</div>
     <div id="clock-next" class="next"></div>
     <div class="timeline"><div id="timeline-fill"></div><div id="timeline-marks"></div></div>
     <div class="clock-actions">
       <button id="btn-clock" class="primary">Start</button>
       <button id="btn-break" class="secondary">Water break</button>
-      <button id="btn-attendance" class="secondary">Attendance</button>
-      <button id="btn-end" class="link danger">End game</button>
     </div>
   </header>
 
@@ -138,6 +136,11 @@
   <div class="actions">
     <button class="secondary" id="btn-edit-mode">Edit lineup</button>
     <button class="secondary" id="btn-live-plan">Show plan</button>
+  </div>
+  <div class="actions tight">
+    <button class="secondary" id="btn-rebalance" hidden>Rebalance plan</button>
+    <button class="secondary" id="btn-attendance">Attendance</button>
+    <button class="link danger" id="btn-end">End game</button>
   </div>
   <div class="card" id="live-plan-card" hidden>
     <div class="card-title">

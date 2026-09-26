@@ -75,6 +75,7 @@ button.small { min-height: 42px; font-size: 15px; width: 100%; margin-top: 8px; 
 .actions button { flex: 1; }
 .actions.tight { margin: 2px 0 10px; }
 .actions.tight .link { flex: 0 0 auto; }
+.actions.tight button { font-size: 14px; padding: 0 8px; white-space: nowrap; }
 .check { display: flex; align-items: center; gap: 10px; min-height: var(--tap); font-size: 15px; }
 .check input { width: 22px; height: 22px; accent-color: var(--pitch); }
 .warn-text { color: var(--off); font-weight: 600; }
@@ -183,10 +184,10 @@ table.plan tr:last-child td.now { border-bottom: 2px dashed var(--keeper); }
 .swaps .on { color: var(--on); font-weight: 700; }
 
 /* ---- scoreboard (clock) ---- */
-.clock { background: var(--pitch); color: #fff; border-radius: var(--radius); padding: 10px 14px 12px; margin: 8px 0 10px; }
-.clock-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-#clock-time { font: 800 72px/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
-.pill { font: 700 15px/1 var(--display); letter-spacing: .04em; background: rgba(255,255,255,.16); padding: 7px 10px; border-radius: 4px; }
+.clock { background: var(--pitch); color: #fff; border-radius: var(--radius); padding: 10px 14px 12px; margin: 8px 0 10px; text-align: center; }
+.clock-meta { display: flex; align-items: center; justify-content: center; gap: 8px; }
+#clock-time { font: 800 76px/1 var(--display); font-variant-numeric: tabular-nums; letter-spacing: .01em; margin: 2px 0 0; }
+.pill { font: 700 14px/1 var(--display); letter-spacing: .05em; background: rgba(255,255,255,.16); padding: 6px 10px; border-radius: 4px; }
 .next { text-align: center; margin: 4px 0 2px; font: 700 18px/1.2 var(--display); font-variant-numeric: tabular-nums; min-height: 22px; letter-spacing: .02em; }
 .next.soon { color: var(--keeper); }
 .timeline { position: relative; height: 10px; background: rgba(255,255,255,.22); border-radius: 5px; margin: 8px 0 12px; }
@@ -198,8 +199,8 @@ table.plan tr:last-child td.now { border-bottom: 2px dashed var(--keeper); }
 .clock-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .clock-actions button { white-space: nowrap; }
 .clock-actions .link { flex: 0 0 auto; }
-.clock-actions .primary { flex: 1 1 42%; background: #fff; border-color: #fff; color: var(--pitch-deep); font-family: var(--display); font-size: 20px; font-weight: 800; }
-.clock-actions .secondary { flex: 1 1 30%; font-size: 14px; min-height: 42px; padding: 0 10px; background: transparent; border-color: rgba(255,255,255,.7); color: #fff; }
+.clock-actions .primary { flex: 1 1 50%; background: #fff; border-color: #fff; color: var(--pitch-deep); font-family: var(--display); font-size: 20px; font-weight: 800; }
+.clock-actions .secondary { flex: 1 1 40%; font-size: 15px; min-height: 48px; padding: 0 12px; background: transparent; border-color: rgba(255,255,255,.7); color: #fff; }
 .clock-actions .link { color: #ffd6dc; }
 .clock.paused #clock-time { opacity: .55; }
 .clock.halftime { background: var(--board-black); }
