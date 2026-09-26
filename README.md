@@ -13,7 +13,7 @@ A phone app for youth soccer coaches that makes equal play time automatic. Works
 - Handles late arrivals and injuries mid-game
 - Remembers who was short-changed so it evens out over the season
 
-Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water break mid-half. The clock runs straight through like a real match — the second half starts at 25:00, not back at 0:00, and keeps going past 50:00 into stoppage time. The clock is yours: it stops when you tap **Water break**, pauses at halftime, and **never ends the game by itself** — it runs into stoppage time until you tap **End game**.
+Game format: 7 on the field in a 1-2-3-1, 2 × 25-minute halves, water breaks at a fixed 12:30 and 37:30. The clock runs straight through like a real match — the second half starts at 25:00, not back at 0:00, and keeps going past 50:00 into stoppage time. The clock is yours: it stops when you tap **Water break**, pauses at halftime, and **never ends the game by itself** — it runs into stoppage time until you tap **End game**.
 
 Positions: **GK** (1), **CB** (4/5, two slots), **W** (7/11, the two wide slots that cover both back and winger), **CM** (8), **ST** (9).
 
@@ -33,7 +33,7 @@ The home screen is just your game plans. Everything about a game — the squad, 
 1. **Pick a plan** to use today, or tap **New plan**. A new plan starts with a rotation the app works out for you, so you can save it as-is and start.
 2. Inside a plan:
    - **Squad** — tap a name to mark who's available today. Tap ✎ to change a player's positions or rename them. Blocks reshape automatically when availability changes.
-   - **Subs per half** — sets the block boundaries. Changing it re-blocks the plan and keeps your starting eleven.
+   - **Subs per half** — sets the block boundaries. Changing it re-blocks the plan and keeps your starting eleven. Water breaks stay at 12:30 and 37:30 whatever you pick; a shift boundary that lands on one is marked 💧.
    - **Blocks** — the tabs run across the whole match (0:00, 6:15, … 25:00 HT, 31:15 …). Pick a block and set the field: tap a position, then a bench player to put them there; tap two positions to swap. **Auto-fill later blocks** finishes the rotation from wherever you are, and turns green to confirm.
    - **Projected minutes** shows what each player gets and the gap between most and least.
    - **Save plan**, then **Start game** from the home screen.

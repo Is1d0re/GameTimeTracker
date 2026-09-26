@@ -102,24 +102,12 @@ const blockStart = (S, b) => b * blockLen(S);
 function blockAt(S, elapsedMin) {
   return Math.min(blockCount(S) - 1, Math.floor(elapsedMin / blockLen(S) + 1e-9));
 }
-// sub times within one half, in minutes from the start of that half
-function subTimesInHalf(S) {
-  const L = blockLen(S);
-  return Array.from({ length: S }, (_, k) => (k + 1) * L);
-}
 // water break snapped to the nearest scheduled sub time in the half
-// Is this block boundary a water break? (one per half, in continuous game time)
-function isWaterBlock(start, S) {
-  const w = waterBreakInHalf(S);
-  return Math.abs(start - w) < 1e-6 || Math.abs(start - (HALF_MIN + w)) < 1e-6;
-}
-const waterTimes = S => [waterBreakInHalf(S), HALF_MIN + waterBreakInHalf(S)];
+// Water breaks are at fixed times — halfway through each half — and do not move with
+// the sub schedule. A block boundary that happens to land on one is marked.
+const WATER_TIMES = [HALF_MIN / 2, HALF_MIN + HALF_MIN / 2];
+const isWaterBlock = start => WATER_TIMES.some(w => Math.abs(start - w) < 1e-6);
 
-function waterBreakInHalf(S) {
-  const target = HALF_MIN / 2;
-  return subTimesInHalf(S).reduce((best, t) =>
-    Math.abs(t - target) < Math.abs(best - target) ? t : best);
-}
 function fairTarget(presentCount) {
   return presentCount > 0 ? (GAME_MIN * ON_FIELD) / presentCount : 0;
 }
@@ -958,7 +946,7 @@ function renderSquad() {
         '<button class="tag rename" data-act="rename" data-id="' + p.id + '">Rename</button></span>' : '');
     ul.appendChild(li);
   });
-  $('use-carry').checked = state.useCarryOver;
+
 }
 
 function renderPlans() {
@@ -974,7 +962,6 @@ function renderPlans() {
   if (!act) { fit.textContent = ''; fit.classList.remove('warn-text'); return; }
   const f = planFit(act);
   const bits = [];
-  if (act.subsPerHalf !== state.subsPerHalf) bits.push('This plan uses ' + act.subsPerHalf + ' subs per half; today is set to ' + state.subsPerHalf + '.');
   if (f.missing.length) bits.push(f.missing.map(nameOf).join(', ') + (f.missing.length === 1 ? ' is' : ' are') + ' in the plan but not here — their spots get filled by whoever is available.');
   if (f.extra.length) bits.push(f.extra.map(nameOf).join(', ') + (f.extra.length === 1 ? ' is' : ' are') + ' here but not in the plan, so they only come on to cover a gap.');
   fit.textContent = bits.join(' ');
@@ -992,7 +979,7 @@ function planGridHtml(ids, blocks, S, totals, currentIndex) {
   let html = '<tr><th></th>';
   blocks.forEach(b => {
     html += '<th class="' + (b.index === S + 1 && !b.played ? 'half-start ' : '') + (isNow(b) ? 'now' : '') + '">' +
-      atClock(b.start) + (b.index === S + 1 ? ' HT' : isWaterBlock(b.start, S) ? ' 💧' : '') + '</th>';
+      atClock(b.start) + (b.index === S + 1 ? ' HT' : isWaterBlock(b.start) ? ' 💧' : '') + '</th>';
   });
   html += '<th>Total</th></tr>';
   ids.forEach(id => {
@@ -1064,7 +1051,7 @@ function planSwapsHtml(blocks, S) {
   let html = '<li><b>Keepers:</b> ' + [...new Set(blocks.map(b => b.gk))].map(nameOf).map(esc).join(' → ') + '</li>';
   for (let i = 1; i < blocks.length; i++) {
     const prev = blocks[i - 1], b = blocks[i];
-    html += '<li><b>' + blockLabel(b, S).when + '</b>' + (isWaterBlock(b.start, S) ? ' 💧' : '') + ' — ' +
+    html += '<li><b>' + blockLabel(b, S).when + '</b>' + (isWaterBlock(b.start) ? ' 💧' : '') + ' — ' +
       swapLineHtml(diffLineups(prev.on, prev.gk, b)) + '</li>';
   }
   return html;
@@ -1225,12 +1212,18 @@ function renderGame() {
     marks.innerHTML = '';
     for (let i = 1; i < blockCount(S); i++) {
       const t = blockStart(S, i);
-      const half = Math.abs(t - HALF_MIN) < 1e-6;
+      if (isWaterBlock(t)) continue;                 // drawn below, at its fixed time
       const sp = document.createElement('span');
-      sp.className = half ? 'half' : isWaterBlock(t, S) ? 'water' : '';
+      sp.className = Math.abs(t - HALF_MIN) < 1e-6 ? 'half' : '';
       sp.style.left = (t / GAME_MIN * 100) + '%';
       marks.appendChild(sp);
     }
+    WATER_TIMES.forEach(t => {
+      const sp = document.createElement('span');
+      sp.className = 'water';
+      sp.style.left = (t / GAME_MIN * 100) + '%';
+      marks.appendChild(sp);
+    });
   }
 
   const btn = $('btn-clock');
@@ -1650,19 +1643,23 @@ function renderPlanner() {
   const times = [];
   for (let i = 1; i < blockCount(S); i++) times.push(blockStart(S, i));
   $('psubs-schedule').textContent = 'Subs at ' + times.map(t =>
-    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t) + (isWaterBlock(t, S) ? ' (water)' : '')).join(', ') +
-    '. Shifts of ' + fmtClock(blockLen(S)) + '.';
+    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t)).join(', ') +
+    '. Shifts of ' + fmtClock(blockLen(S)) + '. Water breaks at ' +
+    WATER_TIMES.map(atClock).join(' and ') + '.';
   $('planner-tabs').innerHTML = d.blocks.map(b => {
     const at = b.index * L;
     return '<button class="tab' + (b.index === d.block ? ' on' : '') + (b.index === S + 1 ? ' half' : '') +
       '" data-block="' + b.index + '">' + atClock(at) +
-      (b.index === S + 1 ? ' HT' : isWaterBlock(at, S) ? ' 💧' : '') + '</button>';
+      (b.index === S + 1 ? ' HT' : isWaterBlock(at) ? ' 💧' : '') + '</button>';
   }).join('');
   const cur = d.blocks.find(b => b.index === d.block) || d.blocks[0];
   const at = cur.index * L;
   $('planner-when').textContent = 'Block ' + (cur.index + 1) + ' of ' + d.blocks.length + ' — ' +
     atClock(at) + ' to ' + atClock(at + L) + ' (' + (cur.index > S ? '2nd half' : '1st half') + ')' +
-    (cur.index === S + 1 ? ', from halftime' : isWaterBlock(at, S) ? ', water break' : '');
+    (cur.index === S + 1 ? ', from halftime'
+      : isWaterBlock(at) ? ', from the water break'
+      : WATER_TIMES.some(w => w > at && w < at + L) ? ', water break at ' + atClock(WATER_TIMES.find(w => w > at && w < at + L))
+      : '');
   const onNow = Object.values(cur.slots);
   const benchIds = ids.filter(id => !onNow.includes(id));
   paintPitch($('planner-pitch'), cur.slots, { bench: benchIds, selected: d.sel, sub: () => '' });
@@ -1676,6 +1673,7 @@ function renderPlanner() {
     '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
   $('btn-planner-delete').hidden = !d.id;
   $('btn-planner-save').disabled = presentIds().length < ON_FIELD;
+  $('use-carry').checked = state.useCarryOver;
   if (!$('plan-card').hidden) renderPlan();
   // The check stays until the plan is edited again
   const fill = $('btn-planner-fill');
