@@ -2022,7 +2022,61 @@ async function handOff(text, filename, mime, fallback) {
   fallback(text);
 }
 
+// A standalone sheet the coach can open and print: the whole grid in colour plus the
+// written run of subs. Self-contained so it works from Files, Mail or a browser tab.
+function planSheetHtml(pl) {
+  const sch = schedOf(pl), HI = halfIndex(sch);
+  const blocks = pl.blocks.map(b => {
+    const slots = b.slots || {};
+    const on = Object.values(slots);
+    return {
+      index: b.index, half: b.index < HI ? 1 : 2,
+      start: blockStart(sch, b.index), end: blockEnd(sch, b.index),
+      on, gk: slots.GK, slots, bench: [],
+    };
+  });
+  const used = new Set();
+  blocks.forEach(b => b.on.forEach(id => used.add(id)));
+  const ids = state.roster.filter(p => used.has(p.id)).map(p => p.id);
+  const totals = planMinutes(blocks, sch);
+  ids.forEach(id => { totals[id] = totals[id] || 0; });
+  const vals = ids.map(id => totals[id]);
+  const gap = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
+  const subTimes = timesOf(pl).slice().sort((a, c) => a - c);
+
+  const css = [
+    'body{font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:#000;margin:24px;}',
+    'h1{font-size:26px;margin:0 0 2px;}',
+    '.meta{color:#3d4a41;margin:0 0 14px;}',
+    'table{border-collapse:collapse;font-size:12px;white-space:nowrap;margin-bottom:16px;}',
+    'th,td{padding:5px 7px;text-align:center;border-bottom:1px solid #c9d3c8;}',
+    'th{font-weight:700;color:#3d4a41;}',
+    'td.player{text-align:left;font-weight:600;}',
+    'td.on{background:#e3f4e8;color:#0e4f2b;font-weight:700;}',
+    'td.gk{background:#fff4c2;color:#5a4400;font-weight:700;}',
+    'td.total{font-weight:700;}',
+    'th.half-start,td.half-start{border-left:2px solid #3d4a41;}',
+    'th.now,td.now{}',
+    'ol{padding-left:20px;font-size:13px;}li{margin:5px 0;}',
+    'b{color:#0e4f2b;}.off{color:#d7263d;font-weight:700;}.on{color:#1e9e55;font-weight:700;}',
+    '@media print{body{margin:10mm;} *{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}',
+  ].join('');
+
+  return '<!doctype html><html><head><meta charset="utf-8">' +
+    '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>' + esc(pl.name) + '</title><style>' + css + '</style></head><body>' +
+    '<h1>' + esc(pl.name) + '</h1>' +
+    '<p class="meta">' + ids.length + ' players · ' + blockCount(sch) + ' shifts · ' +
+      subTimes.length + ' subs plus halftime · gap ' + fmtClock(gap) + '<br>' +
+      'Subs at ' + (subTimes.length ? subTimes.map(atClock).join(', ') + ', ' : '') + 'halftime. ' +
+      'Water breaks at ' + WATER_TIMES.map(atClock).join(' and ') + '.</p>' +
+    '<table>' + planGridHtml(ids, blocks, sch, totals, -1) + '</table>' +
+    '<ol>' + planSwapsHtml(blocks, sch) + '</ol>' +
+    '</body></html>';
+}
+
 // --- sharing a game plan so another phone can load it ---
+const slugName = n => (String(n).replace(/[^\w -]+/g, '').trim().replace(/\s+/g, '-') || 'game-plan');
 function planFile(pl) {
   const used = new Set();
   pl.blocks.forEach(b => Object.values(b.slots || {}).forEach(id => used.add(id)));
@@ -2294,14 +2348,26 @@ $('btn-import').addEventListener('click', () => askForFile('season'));
 $('btn-planner-share').addEventListener('click', async () => {
   const pl = planById(state.draft && state.draft.id);
   if (!pl) return;
-  await handOff(planFile(pl), pl.name.replace(/[^\w -]+/g, '').trim().replace(/\s+/g, '-') + '.json',
+  await handOff(planFile(pl), slugName(pl.name) + '.json',
     'application/json', txt => { $('paste-title').textContent = 'Game plan'; $('paste-hint').textContent = 'Copy this and send it to the other coach.'; $('paste-text').value = txt; $('paste-modal').hidden = false; $('btn-paste-go').hidden = true; });
 });
-$('btn-planner-print').addEventListener('click', () => {
-  renderPlan();
-  $('btn-plan').textContent = 'Hide whole plan';
-  document.body.classList.add('printing');
-  setTimeout(() => { window.print(); document.body.classList.remove('printing'); }, 60);
+$('btn-planner-print').addEventListener('click', async () => {
+  const pl = planById(state.draft && state.draft.id);
+  if (!pl) return;
+  const html = planSheetHtml(pl);
+  const file = slugName(pl.name) + '-plan.html';
+  await handOff(html, file, 'text/html', txt => {
+    // Last resort: open it in a tab so it can be printed from there
+    try {
+      const w = window.open('', '_blank');
+      if (w) { w.document.write(txt); w.document.close(); return; }
+    } catch (e) { /* ignore */ }
+    $('paste-title').textContent = 'Plan sheet';
+    $('paste-hint').textContent = 'Copy this into a file ending in .html, then open and print it.';
+    $('paste-text').value = txt;
+    $('btn-paste-go').hidden = true;
+    $('paste-modal').hidden = false;
+  });
 });
 $('btn-planner-fill').addEventListener('click', () => { autoFillFrom(state.draft.block); renderPlanner(); });
 $('btn-planner-save').addEventListener('click', () => { savePlan(); renderSetup(); show('setup'); });
