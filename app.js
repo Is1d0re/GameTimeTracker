@@ -96,12 +96,36 @@ function save() {
 // ============================================================
 // Block / schedule math
 // ============================================================
-const blockLen = S => HALF_MIN / (S + 1);          // minutes per block
-const blockCount = S => 2 * (S + 1);
-const blockStart = (S, b) => b * blockLen(S);
-function blockAt(S, elapsedMin) {
-  return Math.min(blockCount(S) - 1, Math.floor(elapsedMin / blockLen(S) + 1e-9));
+// A schedule is the list of times each block starts, always beginning at 0:00 and always
+// including halftime. Blocks need not be equal length — the coach can set their own times.
+const evenTimes = S => {
+  const L = HALF_MIN / (S + 1), out = [];
+  for (let i = 1; i < 2 * (S + 1); i++) out.push(Math.round(i * L * 60) / 60);
+  return out.filter(t => Math.abs(t - HALF_MIN) > 1e-6);
+};
+function schedule(times) {
+  const at = new Map();
+  const put = t => {
+    const k = Math.round(t * 60) / 60;
+    if (k >= 0 && k < GAME_MIN - 0.25) at.set(k, k);     // no block shorter than 15s at the end
+  };
+  put(0); put(HALF_MIN);
+  (times || []).forEach(put);
+  return [...at.values()].sort((a, c) => a - c);
+};
+const blockCount = sch => sch.length;
+const blockStart = (sch, b) => sch[b];
+const blockEnd = (sch, b) => (b + 1 < sch.length ? sch[b + 1] : GAME_MIN);
+const blockLen = (sch, b) => blockEnd(sch, b) - blockStart(sch, b);
+function blockAt(sch, min) {
+  let i = 0;
+  while (i + 1 < sch.length && sch[i + 1] <= min + 1e-9) i++;
+  return i;
 }
+const halfIndex = sch => sch.findIndex(t => Math.abs(t - HALF_MIN) < 1e-6);
+// The custom sub times of a plan (everything but 0:00 and halftime)
+const timesOf = pl => (pl && pl.times) ? pl.times.slice() : evenTimes((pl && pl.subsPerHalf) || 3);
+const schedOf = pl => schedule(timesOf(pl));
 // water break snapped to the nearest scheduled sub time in the half
 // Water breaks are at fixed times — halfway through each half — and do not move with
 // the sub schedule. A block boundary that happens to land on one is marked.
@@ -190,7 +214,7 @@ const slotOfPlayer = (slots, id) => Object.keys(slots || {}).find(k => slots[k] 
 // ============================================================
 // Rotation planner
 //   ids        – present player ids, in roster order
-//   S          – subs per half
+//   sch        – block start times (schedule)
 //   minutes    – { id: minutes already credited (actual played + carry-over) }
 //   fromBlock  – first block to plan
 //   onField    – Set of ids currently on (for churn tie-break)
@@ -207,8 +231,8 @@ const slotOfPlayer = (slots, id) => Object.keys(slots || {}).find(k => slots[k] 
 // sub a full line change). One extra handoff is allowed if a keeper would otherwise end
 // up a full block ahead of the player they displace.
 // ============================================================
-function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], played = [], gkEligible, prefsOf, posMins, prevSlots }) {
-  const B = blockCount(S), L = blockLen(S);
+function planFrom({ ids, sch, minutes, fromBlock = 0, onField, gk = null, h1gk = null, h2gk = null, starters = [], played = [], gkEligible, prefsOf, posMins, prevSlots }) {
+  const B = blockCount(sch), HI = halfIndex(sch);
   const n = ids.length;
   const mins = {};
   ids.forEach(id => { mins[id] = minutes[id] || 0; });
@@ -221,8 +245,8 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
   const kickoff = fromBlock === 0 ? starters.filter(id => ids.includes(id)).slice(0, ON_FIELD) : [];
   let on = new Set([...(onField || kickoff)].filter(id => ids.includes(id)));
   let curGk = ids.includes(gk) ? gk : null;
-  let firstGk = ids.includes(h1gk) ? h1gk : (fromBlock <= S ? curGk : null);
-  let secondGk = ids.includes(h2gk) ? h2gk : (fromBlock > S ? curGk : null);
+  let firstGk = ids.includes(h1gk) ? h1gk : (fromBlock < HI ? curGk : null);
+  let secondGk = ids.includes(h2gk) ? h2gk : (fromBlock >= HI ? curGk : null);
   const keepers = new Set([firstGk, secondGk, curGk].filter(Boolean));
   const MAX_KEEPERS = 3;
   const blocks = [];
@@ -233,7 +257,7 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
 
   // Pick first-half keeper (block 0 only) and second-half keeper before planning.
   if (fromBlock === 0 && !firstGk) firstGk = (kickoff.length && lowestEligible([], false, kickoff)) || lowestEligible([], false);
-  if (fromBlock <= S && !secondGk) secondGk = lowestEligible([firstGk], true) || firstGk;
+  if (fromBlock < HI && !secondGk) secondGk = lowestEligible([firstGk], true) || firstGk;
   keepers.add(firstGk); keepers.add(secondGk);
 
   // Virtual credit for the second-half keeper during first-half planning: the minutes
@@ -247,8 +271,9 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
   let lastSlots = prevSlots || null;
 
   for (let b = fromBlock; b < B; b++) {
-    const half = b <= S ? 1 : 2;
-    const firstOfHalf = b === 0 || b === S + 1;
+    const L = blockLen(sch, b);
+    const half = b < HI ? 1 : 2;
+    const firstOfHalf = b === 0 || b === HI;
     const credit = id => (half === 1 && id === secondGk && secondGk !== firstGk && seen.has(id) ? h2Credit : 0);
     const key = id => Math.round((mins[id] + credit(id)) * 2) / 2; // tie within 30s
     // On ties, prefer players coming off the bench so each sub round is a full line change
@@ -270,7 +295,7 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
     const eligibleIn = () => lineup.filter(id => eligible.has(id));
     if (b === 0) {
       force(firstGk); nextGk = firstGk;
-    } else if (b === S + 1) {
+    } else if (b === HI) {
       if (secondGk && ids.includes(secondGk)) { force(secondGk); nextGk = secondGk; }
       else {
         let pool = eligibleIn().filter(id => !keepers.has(id));
@@ -299,7 +324,7 @@ function planFrom({ ids, S, minutes, fromBlock = 0, onField, gk = null, h1gk = n
     lineup = sorted.filter(id => lineup.includes(id)); // keep min-order
     const slots = assignSlots({ on: lineup, gk: nextGk, prefsOf, posMins: pm, prev: lastSlots });
     blocks.push({
-      index: b, half, start: b * L, end: (b + 1) * L,
+      index: b, half, start: blockStart(sch, b), end: blockEnd(sch, b),
       on: lineup, gk: nextGk, bench: ids.filter(id => !lineup.includes(id)), slots,
     });
     Object.keys(slots).forEach(sid => {
@@ -345,7 +370,7 @@ const seedMinutes = ids => {
 function kickoffPlanInputs() {
   const ids = presentIds();
   return {
-    ids, S: state.subsPerHalf, minutes: seedMinutes(ids),
+    ids, sch: schedule(evenTimes(state.subsPerHalf)), minutes: seedMinutes(ids),
     starters: [], h1gk: null, gkEligible: gkEligibleSet(),
     prefsOf, posMins: seasonPosMins(ids),
   };
@@ -378,6 +403,7 @@ function newGame() {
     elapsedMs: 0,
     runningSince: null,
     subsPerHalf: (activePlan() || state).subsPerHalf,
+    sch: schedOf(activePlan()),
     players, gk: null, h1gk: null, h2gk: null,
     lastAlertBlock: 0,
     pending: null,
@@ -560,9 +586,9 @@ function tick() {
 
   if (g.phase === 'h1' && !g.playOn && min >= HALF_MIN - 1e-9) {
     pauseClock(); g.elapsedMs = HALF_MIN * 60000; g.phase = 'halftime';
-    g.lastAlertBlock = S + 1;
+    g.lastAlertBlock = halfIndex(gameSched(g));
     alertUser();
-    suggestForBlock(S + 1, 'Halftime');
+    suggestForBlock(halfIndex(gameSched(g)), 'Halftime');
     save();
   } else if (g.phase === 'h2' && !g.ftAlerted && min >= GAME_MIN - 1e-9) {
     // Full time by the clock, but the game is over when the coach says so
@@ -582,23 +608,24 @@ function tick() {
 
 // The block we are in. Stoppage time stays in the last block of its half rather than
 // spilling into the next one.
+const gameSched = g => (g && g.sch && g.sch.length ? g.sch : schedule(evenTimes((g && g.subsPerHalf) || 3)));
 function currentBlock(g) {
-  const S = g.subsPerHalf;
-  const b = blockAt(S, elapsedMin());
-  if (g.phase === 'h1') return Math.min(b, S);
-  if (g.phase === 'halftime') return S + 1;
-  return Math.min(b, blockCount(S) - 1);
+  const sch = gameSched(g), HI = halfIndex(sch);
+  const b = blockAt(sch, elapsedMin());
+  if (g.phase === 'h1') return Math.min(b, HI - 1);
+  if (g.phase === 'halftime') return HI;
+  return Math.min(b, blockCount(sch) - 1);
 }
 
 // Where we are among the columns of "Plan from here". An off-plan sub inside a block
 // adds a column, so both the position and the total grow.
 function blockCounter(g) {
-  const S = g.subsPerHalf;
+  const sch = gameSched(g);
   const splits = (g.log || []).filter(e =>
-    e.slots && e.offPlan && e.t > blockStart(S, blockAt(S, e.t)) + 1e-6);
+    e.slots && e.offPlan && e.t > blockStart(sch, blockAt(sch, e.t)) + 1e-6);
   const b = currentBlock(g);
   const before = splits.filter(e => e.t <= elapsedMin() + 1e-6).length;
-  return { at: b + 1 + before, total: blockCount(S) + splits.length };
+  return { at: b + 1 + before, total: blockCount(sch) + splits.length };
 }
 
 const playedIds = ids => ids.filter(id => playedMs(id) > 0);
@@ -672,8 +699,8 @@ function plannedBlockFor(pl, target, ids, minutes, prevSlots) {
 // Keeper for a manually built lineup: planned half keeper if on, else current keeper if
 // still on, else the lowest-minute eligible player in the lineup.
 function pickGk(target, lineup, gk, minutes) {
-  const g = state.game, S = g.subsPerHalf;
-  if (target === S + 1 && lineup.includes(g.h2gk)) return g.h2gk;
+  const g = state.game;
+  if (target === halfIndex(gameSched(g)) && lineup.includes(g.h2gk)) return g.h2gk;
   if (gk && lineup.includes(gk)) return gk;
   let elig = lineup.filter(id => gkEligibleSet().has(id));
   if (!elig.length) elig = lineup;
@@ -683,17 +710,17 @@ function pickGk(target, lineup, gk, minutes) {
 // The sub to make at the start of `target`, given the lineup and credited minutes at that
 // moment. Honours a coach override; otherwise asks the planner.
 function subForBlock(target, ids, onField, gk, minutes) {
-  const g = state.game, S = g.subsPerHalf;
+  const g = state.game, sch = gameSched(g);
   const manual = validOverride(target, ids) || plannedBlock(target, ids, onField, minutes);
   if (manual) {
     const slots = manual.slots;
     const on2 = Object.values(slots);
     const gk2 = slots.GK || pickGk(target, on2, gk, minutes);
-    const block = { index: target, half: target <= S ? 1 : 2, start: blockStart(S, target), end: blockStart(S, target + 1), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)), slots };
+    const block = { index: target, half: target < halfIndex(sch) ? 1 : 2, start: blockStart(sch, target), end: blockEnd(sch, target), on: on2, gk: gk2, bench: ids.filter(id => !on2.includes(id)), slots };
     return { block, diff: diffForSlots(slots, onField, gk), manual: true, fromPlan: !!manual.fromPlan, plan: null };
   }
   const plan = planFrom({
-    ids, S, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
+    ids, sch, minutes, fromBlock: target, onField, gk, h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
     gkEligible: gkEligibleSet(), prefsOf, posMins: livePosMins(ids), prevSlots: g.slots,
   });
   if (!plan.blocks.length) return null;
@@ -761,7 +788,7 @@ function saveToSeason() {
     id: 'g' + Date.now(),
     date: new Date().toISOString().slice(0, 10),
     subsPerHalf: g.subsPerHalf,
-    players: ids, names, minutes, shares, avail, posMinutes, prefs,
+    players: ids, names, minutes, shares, avail, posMinutes, prefs, sch: gameSched(g).slice(),
     h1gk: g.h1gk, h2gk: g.h2gk,
     plan: g.plan || [], log: g.log || [],
   });
@@ -970,22 +997,23 @@ function renderPlans() {
 
 
 // Shared renderers for a list of plan blocks (setup preview and in-game forecast)
-function blockLabel(b, S) {
-  return { at: b.start, when: b.index === S + 1 ? 'Halftime' : atClock(b.start) };
+const isHalftimeBlock = b => Math.abs(b.start - HALF_MIN) < 1e-6 && !b.played;
+function blockLabel(b) {
+  return { at: b.start, when: isHalftimeBlock(b) ? 'Halftime' : atClock(b.start) };
 }
-function planGridHtml(ids, blocks, S, totals, currentIndex) {
+function planGridHtml(ids, blocks, sch, totals, currentIndex) {
   const flagged = blocks.some(b => b.now);
   const isNow = b => (flagged ? !!b.now : b.index === currentIndex);
   let html = '<tr><th></th>';
   blocks.forEach(b => {
-    html += '<th class="' + (b.index === S + 1 && !b.played ? 'half-start ' : '') + (isNow(b) ? 'now' : '') + '">' +
-      atClock(b.start) + (b.index === S + 1 ? ' HT' : isWaterBlock(b.start) ? ' 💧' : '') + '</th>';
+    html += '<th class="' + (isHalftimeBlock(b) ? 'half-start ' : '') + (isNow(b) ? 'now' : '') + '">' +
+      atClock(b.start) + (isHalftimeBlock(b) ? ' HT' : isWaterBlock(b.start) ? ' 💧' : '') + '</th>';
   });
   html += '<th>Total</th></tr>';
   ids.forEach(id => {
     html += '<tr><td class="player">' + esc(nameOf(id)) + '</td>';
     blocks.forEach(b => {
-      const cls = (b.index === S + 1 && !b.played ? 'half-start ' : '') + (isNow(b) ? 'now ' : '') +
+      const cls = (isHalftimeBlock(b) ? 'half-start ' : '') + (isNow(b) ? 'now ' : '') +
         (b.gk === id ? 'gk' : b.on.includes(id) ? 'on' : '');
       const sl = slotById(slotOfPlayer(b.slots, id));
       html += '<td class="' + cls + '">' + (b.gk === id ? 'GK' : b.on.includes(id) ? (sl ? esc(sl.label) : '●') : '') + '</td>';
@@ -1047,11 +1075,11 @@ function boardPanelsHtml(d, extra, newSlots, oldSlots) {
   return '<div class="board-subs">' + rows + '</div>' +
     (foot ? '<div class="board-foot">' + foot + '</div>' : '');
 }
-function planSwapsHtml(blocks, S) {
+function planSwapsHtml(blocks, sch) {
   let html = '<li><b>Keepers:</b> ' + [...new Set(blocks.map(b => b.gk))].map(nameOf).map(esc).join(' → ') + '</li>';
   for (let i = 1; i < blocks.length; i++) {
     const prev = blocks[i - 1], b = blocks[i];
-    html += '<li><b>' + blockLabel(b, S).when + '</b>' + (isWaterBlock(b.start) ? ' 💧' : '') + ' — ' +
+    html += '<li><b>' + blockLabel(b).when + '</b>' + (isWaterBlock(b.start) ? ' 💧' : '') + ' — ' +
       swapLineHtml(diffLineups(prev.on, prev.gk, b)) + '</li>';
   }
   return html;
@@ -1061,19 +1089,19 @@ function planSwapsHtml(blocks, S) {
 function renderPlan() {
   const d = state.draft, ids = presentIds();
   if (!d || ids.length < ON_FIELD) { $('plan-card').hidden = true; return; }
-  const S = d.subsPerHalf, L = blockLen(S);
+  const sch = schedOf(d), HI = halfIndex(sch);
   const blocks = d.blocks.map(b => {
     const on = Object.values(b.slots);
     return {
-      index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L,
+      index: b.index, half: b.index < HI ? 1 : 2, start: blockStart(sch, b.index), end: blockEnd(sch, b.index),
       on, gk: b.slots.GK, slots: b.slots, bench: ids.filter(id => !on.includes(id)),
     };
   });
-  const totals = planMinutes(blocks, S);
+  const totals = planMinutes(blocks, sch);
   ids.forEach(id => { totals[id] = totals[id] || 0; });
-  $('plan-grid').innerHTML = planGridHtml(ids, blocks, S, totals, -1);
-  $('plan-swaps').innerHTML = planSwapsHtml(blocks, S);
-  $('plan-summary').textContent = blockCount(S) + ' shifts of ' + fmtClock(L);
+  $('plan-grid').innerHTML = planGridHtml(ids, blocks, sch, totals, -1);
+  $('plan-swaps').innerHTML = planSwapsHtml(blocks, sch);
+  $('plan-summary').textContent = blockCount(sch) + ' shifts';
   $('plan-card').hidden = false;
 }
 
@@ -1083,7 +1111,7 @@ function renderPlan() {
 function liveForecast() {
   const g = state.game;
   if (!g || g.phase === 'done') return null;
-  const S = g.subsPerHalf, B = blockCount(S);
+  const sch = gameSched(g), B = blockCount(sch), HI = halfIndex(sch);
   const min = elapsedMin();
   const b = currentBlock(g);
   const ids = presentIds().filter(id => g.players[id]);
@@ -1100,9 +1128,9 @@ function liveForecast() {
     (g.log || []).length].join('|');
   const seed = seedMinutes(ids);
   const minutes = currentMinutes();
-  const remain = Math.max(0, Math.min(blockStart(S, b + 1), GAME_MIN) - min);
+  const remain = Math.max(0, blockEnd(sch, b) - min);
   onField.forEach(id => { minutes[id] += remain; });
-  const bStart = blockStart(S, b);
+  const bStart = blockStart(sch, b);
   // Lineups this block has already seen: the one it started with, then any change made
   // since. Each becomes its own column so an unplanned sub shows up at the time it happened.
   const offPlan = (g.log || []).filter(e => e.slots && e.offPlan && e.t > bStart + 1e-6);
@@ -1117,9 +1145,9 @@ function liveForecast() {
   stages[stages.length - 1].slots = g.slots || {};                   // the live lineup is the last word
   const past = stages.slice(0, -1).map(st => {
     const on = Object.values(st.slots);
-    return { index: b, half: b <= S ? 1 : 2, start: st.t, end: blockStart(S, b + 1), on, gk: st.slots.GK, bench: ids.filter(id => !on.includes(id)), slots: st.slots, played: true };
+    return { index: b, half: b < HI ? 1 : 2, start: st.t, end: blockEnd(sch, b), on, gk: st.slots.GK, bench: ids.filter(id => !on.includes(id)), slots: st.slots, played: true };
   });
-  const current = { index: b, half: b <= S ? 1 : 2, start: stages[stages.length - 1].t, end: blockStart(S, b + 1), on: onField, gk, bench: ids.filter(id => !onField.includes(id)), slots: g.slots || {}, now: true };
+  const current = { index: b, half: b < HI ? 1 : 2, start: stages[stages.length - 1].t, end: blockEnd(sch, b), on: onField, gk, bench: ids.filter(id => !onField.includes(id)), slots: g.slots || {}, now: true };
   let blocks = past.concat([current]), next = null, projected = minutes;
   if (b + 1 < B) {
     const sub = subForBlock(b + 1, ids, onField, gk, minutes);
@@ -1127,12 +1155,12 @@ function liveForecast() {
     if (sub.manual) {
       // Coach's lineup for the next block, then let the planner take over from there
       const minutes2 = Object.assign({}, minutes);
-      sub.block.on.forEach(id => { minutes2[id] += blockLen(S); });
+      sub.block.on.forEach(id => { minutes2[id] += blockLen(sch, b + 1); });
       blocks = past.concat([current, sub.block]);
       projected = minutes2;
       if (b + 2 < B) {
         const rest = planFrom({
-          ids, S, minutes: minutes2, fromBlock: b + 2, onField: sub.block.on, gk: sub.block.gk,
+          ids, sch, minutes: minutes2, fromBlock: b + 2, onField: sub.block.on, gk: sub.block.gk,
           h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids).concat(sub.block.on), gkEligible: gkEligibleSet(),
           prefsOf, posMins: livePosMins(ids), prevSlots: sub.block.slots,
         });
@@ -1157,7 +1185,7 @@ function liveForecast() {
   });
   ids.forEach(id => {
     fair[id] = sumAvail > 0 ? sumTotal * avail[id] / sumAvail : 0;
-    behind[id] = totals[id] < fair[id] - blockLen(S) + 1e-6;
+    behind[id] = totals[id] < fair[id] - blockLen(sch, b) + 1e-6;
   });
   return { key, blocks, next, totals, fair, behind, ids };
 }
@@ -1166,7 +1194,7 @@ function liveForecast() {
 function renderGame() {
   const g = state.game;
   if (!g) return;
-  const S = g.subsPerHalf;
+  const sch = gameSched(g);
   const min = elapsedMin();
   const shownMin = g.phase === 'halftime' ? HALF_MIN : min;
   const b = currentBlock(g);
@@ -1198,7 +1226,7 @@ function renderGame() {
   } else if (fullTime || overHalf) {
     nextEl.textContent = 'Playing on — tap End game when the ref blows';
   } else {
-    const nextBoundary = Math.min(blockStart(S, b + 1), g.phase === 'h1' ? HALF_MIN : GAME_MIN);
+    const nextBoundary = Math.min(blockEnd(sch, b), g.phase === 'h1' ? HALF_MIN : GAME_MIN);
     const remain = Math.max(0, nextBoundary - min);
     const label = Math.abs(nextBoundary - HALF_MIN) < 1e-6 ? 'Halftime' : Math.abs(nextBoundary - GAME_MIN) < 1e-6 ? 'Full time' : 'Next sub';
     nextEl.textContent = label + ' in ' + fmtClock(remain);
@@ -1207,11 +1235,11 @@ function renderGame() {
 
   $('timeline-fill').style.width = Math.min(100, min / GAME_MIN * 100) + '%';
   const marks = $('timeline-marks');
-  if (marks.dataset.s !== String(S)) {
-    marks.dataset.s = String(S);
+  if (marks.dataset.s !== sch.join(',')) {
+    marks.dataset.s = sch.join(',');
     marks.innerHTML = '';
-    for (let i = 1; i < blockCount(S); i++) {
-      const t = blockStart(S, i);
+    for (let i = 1; i < blockCount(sch); i++) {
+      const t = blockStart(sch, i);
       if (isWaterBlock(t)) continue;                 // drawn below, at its fixed time
       const sp = document.createElement('span');
       sp.className = Math.abs(t - HALF_MIN) < 1e-6 ? 'half' : '';
@@ -1243,8 +1271,8 @@ function renderGame() {
     const p = g.pending;
     $('banner-title').textContent = p.title;
     const pb = p.block != null ? p.block : b;
-    $('banner').querySelector('.board-strip .muted').textContent = pb === S + 1 ? 'before the 2nd half' :
-      atClock(blockStart(S, pb));
+    $('banner').querySelector('.board-strip .muted').textContent = pb === halfIndex(sch) ? 'before the 2nd half' :
+      atClock(blockStart(sch, pb));
     // An edited sub can leave the wrong number on the field; never let Apply commit that
     const onNow = ids.filter(id => g.players[id].onField).length;
     const after = onNow - p.off.length + p.on.length;
@@ -1281,7 +1309,7 @@ function renderGame() {
   const previewEl = $('clock-preview');
   const problem = overrideProblem(fc);
   const canEdit = !!next && g.phase !== 'done';
-  const whenLabel = next ? (next.block.index === S + 1 ? 'at halftime' : 'at ' + atClock(next.block.start)) : '';
+  const whenLabel = next ? (next.block.index === halfIndex(sch) ? 'at halftime' : 'at ' + atClock(next.block.start)) : '';
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
@@ -1304,8 +1332,8 @@ function renderGame() {
   clock.classList.toggle('editing', !!g.editNext);
   if (fc && !$('live-plan-card').hidden && $('live-plan-card').dataset.key !== fc.key) {
     $('live-plan-card').dataset.key = fc.key;
-    setHtml($('live-plan-grid'), fc.totals ? planGridHtml(fc.ids, fc.blocks, S, fc.totals, fc.blocks[0].index) : '');
-    setHtml($('live-plan-swaps'), fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, S) : '<li>No more subs scheduled.</li>');
+    setHtml($('live-plan-grid'), fc.totals ? planGridHtml(fc.ids, fc.blocks, sch, fc.totals, fc.blocks[0].index) : '');
+    setHtml($('live-plan-swaps'), fc.blocks.length > 1 ? planSwapsHtml(fc.blocks, sch) : '<li>No more subs scheduled.</li>');
   }
 
   const editing = !!g.editNext;
@@ -1358,7 +1386,7 @@ function renderGame() {
   const rebDone = g.rebalancedAt === (g.log || []).length;
   reb.classList.toggle('done', rebDone);
   reb.innerHTML = rebDone ? '<span class="tick">✓</span> Rebalanced' : 'Rebalance plan';
-  reb.disabled = currentBlock(g) >= blockCount(S) - 1;
+  reb.disabled = currentBlock(g) >= blockCount(sch) - 1;
   $('game-hint').textContent = editing
     ? 'Tap a position, then a bench player to put them there. Tap two positions to swap.'
     : 'Tap Edit lineup to change positions or make an unplanned sub.';
@@ -1522,7 +1550,7 @@ function replanRemaining() {
   const S = g.subsPerHalf, b = currentBlock(g);
   const ids = presentIds().filter(id => g.players[id]);
   const plan = planFrom({
-    ids, S, minutes: currentMinutes(), fromBlock: b + 1,
+    ids, sch: gameSched(g), minutes: currentMinutes(), fromBlock: b + 1,
     onField: ids.filter(id => g.players[id].onField), gk: g.gk,
     h1gk: g.h1gk, h2gk: g.h2gk, played: playedIds(ids),
     gkEligible: gkEligibleSet(), prefsOf, posMins: livePosMins(ids), prevSlots: g.slots,
@@ -1546,7 +1574,6 @@ function togglePos(p, posId) {
 // ---------- Game plans ----------
 const activePlan = () => state.plans.find(p => p.id === state.activePlanId) || null;
 const planById = id => state.plans.find(p => p.id === id) || null;
-const planBlockLen = pl => blockLen(pl.subsPerHalf);
 
 // Who a plan uses, and how today's attendance compares
 function planFit(pl) {
@@ -1561,23 +1588,26 @@ function planFit(pl) {
 }
 
 // Minutes each player gets from a set of blocks
-function planMinutes(blocks, S) {
-  const L = blockLen(S), out = {};
-  blocks.forEach(b => Object.values(b.slots || {}).forEach(id => { out[id] = (out[id] || 0) + L; }));
+function planMinutes(blocks, sch) {
+  const out = {};
+  blocks.forEach(b => {
+    const L = b.end != null && b.start != null ? b.end - b.start : blockLen(sch, b.index);
+    Object.values(b.slots || {}).forEach(id => { out[id] = (out[id] || 0) + L; });
+  });
   return out;
 }
 
 function newDraft(fromPlan) {
   if (fromPlan) {
     state.draft = {
-      id: fromPlan.id, name: fromPlan.name, subsPerHalf: fromPlan.subsPerHalf,
+      id: fromPlan.id, name: fromPlan.name, subsPerHalf: fromPlan.subsPerHalf, times: timesOf(fromPlan),
       blocks: fromPlan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
       block: 0, sel: null,
     };
   } else {
-    const plan = planFrom(kickoffPlanInputs());
+    const plan = planFrom(Object.assign(kickoffPlanInputs(), { sch: schedule(evenTimes(state.subsPerHalf)) }));
     state.draft = {
-      id: null, name: '', subsPerHalf: state.subsPerHalf,
+      id: null, name: '', subsPerHalf: state.subsPerHalf, times: evenTimes(state.subsPerHalf),
       blocks: plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
       block: 0, sel: null,
     };
@@ -1588,23 +1618,23 @@ function newDraft(fromPlan) {
 // Re-run the planner for every block after `from`, seeded with the blocks already set
 function autoFillFrom(from) {
   const d = state.draft;
-  const S = d.subsPerHalf;
+  const sch = schedOf(d);
   const ids = presentIds();
   const kept = d.blocks.filter(b => b.index <= from);
   const minutes = seedMinutes(ids);
   const pm = seasonPosMins(ids);
-  const L = blockLen(S);
   kept.forEach(b => Object.keys(b.slots).forEach(sid => {
     const pid = b.slots[sid];
+    const L = blockLen(sch, b.index);
     minutes[pid] = (minutes[pid] || 0) + L;
     const grp = slotById(sid).pos;
     pm[pid] = pm[pid] || {}; pm[pid][grp] = (pm[pid][grp] || 0) + L;
   }));
   const last = kept[kept.length - 1];
   const rest = planFrom({
-    ids, S, minutes, fromBlock: from + 1,
+    ids, sch, minutes, fromBlock: from + 1,
     onField: Object.values(last.slots), gk: last.slots.GK,
-    h1gk: kept.find(b => b.index <= S) ? kept[0].slots.GK : null,
+    h1gk: kept.length ? kept[0].slots.GK : null,
     played: Object.keys(minutes).filter(id => minutes[id] > (seedMinutes(ids)[id] || 0)),
     gkEligible: gkEligibleSet(), prefsOf, posMins: pm, prevSlots: last.slots,
   });
@@ -1654,38 +1684,46 @@ function adaptDraftToSquad() {
 function renderPlanner() {
   const d = state.draft;
   if (!d) return;
-  const S = d.subsPerHalf, L = blockLen(S);
+  const sch = schedOf(d), HI = halfIndex(sch);
+  const S = d.subsPerHalf;
   const ids = presentIds();
   renderSquad();
   $('planner-title').textContent = d.name || 'New game plan';
   $('psubs-value').textContent = S;
   $('psubs-minus').disabled = S <= MIN_SUBS;
   $('psubs-plus').disabled = S >= MAX_SUBS;
-  const times = [];
-  for (let i = 1; i < blockCount(S); i++) times.push(blockStart(S, i));
-  $('psubs-schedule').textContent = 'Subs at ' + times.map(t =>
-    Math.abs(t - HALF_MIN) < 1e-6 ? 'halftime' : atClock(t)).join(', ') +
-    '. Shifts of ' + fmtClock(blockLen(S)) + '. Water breaks at ' +
-    WATER_TIMES.map(atClock).join(' and ') + '.';
+  $('psubs-schedule').textContent = 'Water breaks at ' + WATER_TIMES.map(atClock).join(' and ') +
+    '. Halftime is always a sub.';
+  // Each sub time can be nudged or removed; halftime and kickoff are fixed
+  const custom = timesOf(d).slice().sort((a, c) => a - c);
+  $('times-list').innerHTML = custom.map((t, i) =>
+    '<li><span class="tlabel">' + atClock(t) + '</span>' +
+    '<span class="tlen">' + fmtClock(blockLen(sch, sch.indexOf(t))) + ' shift</span>' +
+    '<button class="tag" data-nudge="' + i + '" data-by="-0.25">−15s</button>' +
+    '<button class="tag" data-nudge="' + i + '" data-by="0.25">+15s</button>' +
+    '<button class="tag drop" data-drop="' + i + '">Remove</button></li>').join('') ||
+    '<li class="muted">No subs except halftime.</li>';
+  $('times-summary').textContent = custom.length + ' sub' + (custom.length === 1 ? '' : 's') +
+    ' plus halftime — ' + blockCount(sch) + ' shifts';
   $('planner-tabs').innerHTML = d.blocks.map(b => {
-    const at = b.index * L;
-    return '<button class="tab' + (b.index === d.block ? ' on' : '') + (b.index === S + 1 ? ' half' : '') +
+    const at = blockStart(sch, b.index);
+    return '<button class="tab' + (b.index === d.block ? ' on' : '') + (b.index === HI ? ' half' : '') +
       '" data-block="' + b.index + '">' + atClock(at) +
-      (b.index === S + 1 ? ' HT' : isWaterBlock(at) ? ' 💧' : '') + '</button>';
+      (b.index === HI ? ' HT' : isWaterBlock(at) ? ' 💧' : '') + '</button>';
   }).join('');
   const cur = d.blocks.find(b => b.index === d.block) || d.blocks[0];
-  const at = cur.index * L;
+  const at = blockStart(sch, cur.index), to = blockEnd(sch, cur.index);
   $('planner-when').textContent = 'Block ' + (cur.index + 1) + ' of ' + d.blocks.length + ' — ' +
-    atClock(at) + ' to ' + atClock(at + L) + ' (' + (cur.index > S ? '2nd half' : '1st half') + ')' +
-    (cur.index === S + 1 ? ', from halftime'
+    atClock(at) + ' to ' + atClock(to) + ' (' + (cur.index >= HI ? '2nd half' : '1st half') + ')' +
+    (cur.index === HI ? ', from halftime'
       : isWaterBlock(at) ? ', from the water break'
-      : WATER_TIMES.some(w => w > at && w < at + L) ? ', water break at ' + atClock(WATER_TIMES.find(w => w > at && w < at + L))
+      : WATER_TIMES.some(w => w > at && w < to) ? ', water break at ' + atClock(WATER_TIMES.find(w => w > at && w < to))
       : '');
   const onNow = Object.values(cur.slots);
   const benchIds = ids.filter(id => !onNow.includes(id));
   paintPitch($('planner-pitch'), cur.slots, { bench: benchIds, selected: d.sel, sub: () => '' });
 
-  const mins = planMinutes(d.blocks, S);
+  const mins = planMinutes(d.blocks.map(b => ({ slots: b.slots, index: b.index })), sch);
   const vals = ids.map(id => mins[id] || 0);
   const gap = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
   $('planner-gap').textContent = 'gap ' + fmtClock(gap);
@@ -1703,13 +1741,60 @@ function renderPlanner() {
   const done = d.filled != null;
   fill.classList.toggle('done', done);
   fill.innerHTML = done
-    ? '<span class="tick">✓</span> Filled from ' + atClock(d.filled * blockLen(S))
+    ? '<span class="tick">✓</span> Filled from ' + atClock(blockStart(sch, d.filled))
     : 'Auto-fill later blocks';
   fill.disabled = d.block >= d.blocks.length - 1;
 }
 
 // Changing subs per half changes the block boundaries, so the plan is rebuilt around the
 // starting lineup the coach already chose.
+// Re-block the plan around a new set of sub times, keeping the starting lineup.
+function reblockDraft(times) {
+  const d = state.draft;
+  const ids = presentIds();
+  d.times = schedule(times).filter(t => t > 0 && Math.abs(t - HALF_MIN) > 1e-6);
+  d.block = Math.min(d.block, schedule(d.times).length - 1);
+  d.sel = null; d.filled = null;
+  if (ids.length < ON_FIELD) { save(); return; }
+  const first = d.blocks[0] ? Object.values(d.blocks[0].slots).filter(id => ids.includes(id)) : [];
+  const gk0 = d.blocks[0] && ids.includes(d.blocks[0].slots.GK) ? d.blocks[0].slots.GK : null;
+  const plan = planFrom(Object.assign(kickoffPlanInputs(), {
+    sch: schedule(d.times), starters: first.length === ON_FIELD ? first : [], h1gk: gk0,
+  }));
+  d.blocks = plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
+  save();
+}
+// Move one sub time by a few seconds, keeping it clear of its neighbours
+function nudgeTime(i, by) {
+  const d = state.draft;
+  const times = timesOf(d).slice().sort((a, c) => a - c);
+  if (i < 0 || i >= times.length) return;
+  const others = times.filter((_, k) => k !== i).concat([0, HALF_MIN, GAME_MIN]);
+  let t = Math.round((times[i] + by) * 60) / 60;
+  if (t <= 0.25 || t >= GAME_MIN - 0.25) return;
+  if (others.some(o => Math.abs(o - t) < 0.25)) return;    // keep shifts at least 15s long
+  times[i] = t;
+  reblockDraft(times);
+}
+function dropTime(i) {
+  const times = timesOf(state.draft).slice().sort((a, c) => a - c);
+  times.splice(i, 1);
+  reblockDraft(times);
+}
+// Add a sub in the middle of the longest shift
+function addTime() {
+  const d = state.draft;
+  const sch = schedOf(d);
+  let best = 0, bestLen = 0;
+  for (let i = 0; i < sch.length; i++) {
+    const L = blockLen(sch, i);
+    if (L > bestLen) { bestLen = L; best = i; }
+  }
+  if (bestLen < 0.75) return;
+  const mid = Math.round((blockStart(sch, best) + bestLen / 2) * 60) / 60;
+  reblockDraft(timesOf(d).concat(mid));
+}
+
 function setDraftSubs(S) {
   const d = state.draft;
   if (!d || S < MIN_SUBS || S > MAX_SUBS) return;
@@ -1717,10 +1802,8 @@ function setDraftSubs(S) {
   const first = d.blocks[0] ? Object.values(d.blocks[0].slots).filter(id => ids.includes(id)) : [];
   const gk0 = d.blocks[0] && ids.includes(d.blocks[0].slots.GK) ? d.blocks[0].slots.GK : null;
   d.subsPerHalf = S;
-  d.block = 0; d.sel = null; d.filled = null;
-  const plan = planFrom(Object.assign(kickoffPlanInputs(), { S, starters: first, h1gk: gk0 }));
-  d.blocks = plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
-  save();
+  d.block = 0;
+  reblockDraft(evenTimes(S));
 }
 
 function savePlan() {
@@ -1728,7 +1811,7 @@ function savePlan() {
   if (!d) return;
   d.name = (d.name || '').trim() || 'Game plan ' + (state.plans.length + 1);
   const rec = {
-    id: d.id || 'pl' + Date.now(), name: d.name, subsPerHalf: d.subsPerHalf,
+    id: d.id || 'pl' + Date.now(), name: d.name, subsPerHalf: d.subsPerHalf, times: timesOf(d),
     playerIds: presentIds().slice(),
     blocks: d.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) })),
     savedAt: new Date().toISOString().slice(0, 10),
@@ -1945,7 +2028,7 @@ function planFile(pl) {
   pl.blocks.forEach(b => Object.values(b.slots || {}).forEach(id => used.add(id)));
   return JSON.stringify({
     app: 'game-time', kind: 'plan', v: 1,
-    plan: { name: pl.name, subsPerHalf: pl.subsPerHalf, blocks: pl.blocks, savedAt: pl.savedAt },
+    plan: { name: pl.name, subsPerHalf: pl.subsPerHalf, times: timesOf(pl), blocks: pl.blocks, savedAt: pl.savedAt },
     players: [...used].map(id => {
       const p = byId(id) || {};
       return { id, name: p.name || id, prefs: (p.prefs || []).slice() };
@@ -1981,7 +2064,7 @@ function importPlanFile(text) {
   if (!confirm('Add “' + (data.plan.name || 'Shared plan') + '” to your plans?' + note)) return false;
   const rec = {
     id: 'pl' + Date.now(), name: (data.plan.name || 'Shared plan').slice(0, 40),
-    subsPerHalf: data.plan.subsPerHalf || 3, playerIds: [...new Set(Object.values(map))],
+    subsPerHalf: data.plan.subsPerHalf || 3, times: data.plan.times, playerIds: [...new Set(Object.values(map))],
     blocks, savedAt: new Date().toISOString().slice(0, 10),
   };
   state.plans.push(rec);
@@ -2038,6 +2121,8 @@ function renderGameDetail(key) {
   const h = gameByKey(key);
   if (!h) return;
   const S = h.subsPerHalf || 3;
+  const sch = h.sch && h.sch.length ? h.sch : schedule(h.times || evenTimes(S));
+  const HI = halfIndex(sch);
   const ids = (h.players || Object.keys(h.minutes)).slice();
   const name = id => (h.names && h.names[id]) || nameOf(id);
   const idx = state.history.indexOf(h);
@@ -2045,21 +2130,21 @@ function renderGameDetail(key) {
   const vals = ids.map(id => h.minutes[id]);
   const spread = vals.length ? Math.max(...vals) - Math.min(...vals) : 0;
   const keepers = [...new Set((h.log || []).map(e => e.gk).filter(Boolean))].map(name);
-  $('gd-meta').textContent = ids.length + ' players, ' + S + ' subs per half (shifts of ' + fmtClock(blockLen(S)) + '). Gap between most and least: ' + fmtClock(spread) + '.' +
+  $('gd-meta').textContent = ids.length + ' players, ' + (blockCount(sch) - 1) + ' subs including halftime. Gap between most and least: ' + fmtClock(spread) + '.' +
     (keepers.length ? ' Keepers: ' + keepers.join(' → ') + '.' : '');
 
   // Actual lineups per block, from the log (lineup in effect at the block's midpoint)
   const log = h.log || [];
-  const B = blockCount(S), L = blockLen(S);
+  const B = blockCount(sch);
   const blocks = [];
   for (let b = 0; b < B; b++) {
-    const mid = (b + 0.5) * L;
-    const entry = [...log].reverse().find(e => e.t <= mid + 1e-6) || log[0];
+    const mid = (blockStart(sch, b) + blockEnd(sch, b)) / 2;
+    const entry = [...log].reverse().find(e => e.slots && e.t <= mid + 1e-6) || log[0];
     if (!entry) break;
-    blocks.push({ index: b, half: b <= S ? 1 : 2, start: b * L, end: (b + 1) * L, on: entry.on, gk: entry.gk, slots: entry.slots || {}, bench: ids.filter(id => !entry.on.includes(id)) });
+    blocks.push({ index: b, half: b < HI ? 1 : 2, start: blockStart(sch, b), end: blockEnd(sch, b), on: entry.on, gk: entry.gk, slots: entry.slots || {}, bench: ids.filter(id => !entry.on.includes(id)) });
   }
   window.__nameOverride = name;
-  $('gd-actual-grid').innerHTML = blocks.length ? planGridHtml(ids, blocks, S, h.minutes, -1) : '<tr><td class="muted">No lineup log for this game.</td></tr>';
+  $('gd-actual-grid').innerHTML = blocks.length ? planGridHtml(ids, blocks, sch, h.minutes, -1) : '<tr><td class="muted">No lineup log for this game.</td></tr>';
   // Sub log: every lineup change with time
   $('gd-log').innerHTML = log.map((e, i) => {
     if (i === 0) return '<li><b>Kickoff</b> — ' + e.on.map(name).map(esc).join(', ') + (e.gk ? ' · GK ' + esc(name(e.gk)) : '') + '</li>';
@@ -2071,11 +2156,11 @@ function renderGameDetail(key) {
   const plan = (h.plan || []).map(b => {
     const slots = b.slots || {};
     const on = b.on || Object.values(slots);
-    return { index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on, gk: b.gk || slots.GK, slots, bench: [] };
+    return { index: b.index, half: b.index < HI ? 1 : 2, start: blockStart(sch, b.index), end: blockEnd(sch, b.index), on, gk: b.gk || slots.GK, slots, bench: [] };
   });
-  const planTotals = {};
-  ids.forEach(id => { planTotals[id] = plan.filter(b => b.on.includes(id)).length * L; });
-  $('gd-plan-grid').innerHTML = plan.length ? planGridHtml(ids, plan, S, planTotals, -1) : '<tr><td class="muted">No plan saved for this game.</td></tr>';
+  const planTotals = planMinutes(plan, sch);
+  ids.forEach(id => { planTotals[id] = planTotals[id] || 0; });
+  $('gd-plan-grid').innerHTML = plan.length ? planGridHtml(ids, plan, sch, planTotals, -1) : '<tr><td class="muted">No plan saved for this game.</td></tr>';
   window.__nameOverride = null;
   // Playtime table
   const sorted = ids.slice().sort((a, c) => h.minutes[c] - h.minutes[a]);
@@ -2161,6 +2246,13 @@ $('planner-pitch').addEventListener('click', e => {
   d.filled = null;
   save(); renderPlanner();
 });
+$('times-list').addEventListener('click', e => {
+  const n = e.target.closest('[data-nudge]');
+  if (n) { nudgeTime(+n.dataset.nudge, +n.dataset.by); renderPlanner(); return; }
+  const d = e.target.closest('[data-drop]');
+  if (d) { dropTime(+d.dataset.drop); renderPlanner(); }
+});
+$('btn-time-add').addEventListener('click', () => { addTime(); renderPlanner(); });
 $('psubs-minus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf - 1); renderPlanner(); });
 $('psubs-plus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf + 1); renderPlanner(); });
 // Ask for a file, and fall back to pasting when the picker is unavailable

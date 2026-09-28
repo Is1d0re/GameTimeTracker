@@ -33,7 +33,7 @@ The home screen is just your game plans. Everything about a game — the squad, 
 1. **Pick a plan** to use today, or tap **New plan**. A new plan starts with a rotation the app works out for you, so you can save it as-is and start.
 2. Inside a plan:
    - **Squad** — tap a name to mark who's available today. Tap ✎ to change a player's positions or rename them. Blocks reshape automatically when availability changes.
-   - **Subs per half** — sets the block boundaries. Changing it re-blocks the plan and keeps your starting eleven. Water breaks stay at 12:30 and 37:30 whatever you pick; a shift boundary that lands on one is marked 💧.
+   - **Subs per half** lays out evenly spaced shifts to start from. **Sub times** below it then gives you full control: nudge any sub by 15 seconds, remove it, or add one in the middle of the longest shift. Halftime is always a sub and can't be removed; shifts don't have to be equal. Water breaks stay at 12:30 and 37:30 whatever you pick, and a shift boundary that lands on one is marked 💧.
    - **Blocks** — the tabs run across the whole match (0:00, 6:15, … 25:00 HT, 31:15 …). Pick a block and set the field: tap a position, then a bench player to put them there; tap two positions to swap. **Auto-fill later blocks** finishes the rotation from wherever you are, and turns green to confirm.
    - **Projected minutes** shows what each player gets and the gap between most and least.
    - **Save plan**, then **Start game** from the home screen. Once saved, **Print** gives you a one-page sheet for the sideline, and **Share plan** sends a file another coach can text back into their own copy with **Import plan** on the home screen.
@@ -45,6 +45,8 @@ The home screen is just your game plans. Everything about a game — the squad, 
 6. **Rebalance plan** rebuilds every block still to come from the minutes actually played, so unplanned subs don't leave anyone short. Blocks already played are untouched. The button confirms with a green check until the next off-plan change.
 7. **Attendance** handles a late arrival or an injury mid-game. If someone turns up after kickoff, the app says they're not in the rest of the plan and offers **Work into the plan** — that rebuilds every remaining block from the minutes actually played so far, so they get a fair share of what's left. Blocks already played are untouched. Decline it and the plan stands; bring them on yourself with **Edit lineup** whenever you want.
 8. When the ref blows, tap **End game**, then review the summary and tap **Save to season** so the next plan favours anyone who came up short. A player who arrives late or leaves injured gets a pro-rated fair share.
+
+The more lopsided your shifts, the less evenly minutes can come out — a 12-minute shift can't be shared. **Projected minutes** under the pitch shows the gap as you edit, so you can see what a schedule costs before you save it.
 
 Minutes in each position appear under every player's name on the game summary, and the **Season** screen has a **Time by position** table for the whole season — a column per position, red where it isn't one the player is marked for.
 

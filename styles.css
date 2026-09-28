@@ -233,6 +233,15 @@ table.plan tr:last-child td.now { border-bottom: 2px dashed var(--keeper); }
 .board.editing .board-strip button.link { color: #fff; min-height: 36px; }
 .board.editing .board-strip #btn-edit-done { background: #fff; color: var(--pitch-deep); border-radius: 4px; padding: 0 14px; text-decoration: none; }
 
+/* ---- sub times ---- */
+.times { list-style: none; margin: 0 0 6px; padding: 0; }
+.times li { display: flex; align-items: center; gap: 6px; min-height: var(--tap); border-top: 1px solid var(--line); }
+.times li:first-child { border-top: 0; }
+.tlabel { font: 800 19px/1 var(--display); font-variant-numeric: tabular-nums; min-width: 62px; }
+.tlen { flex: 1; font-size: 13px; color: var(--ink-soft); }
+.times .tag { min-height: 40px; min-width: 52px; padding: 0 8px; font-family: var(--text); font-size: 13px; font-weight: 600; letter-spacing: 0; }
+.times .tag.drop { color: var(--off); border-color: var(--off-tint); }
+
 /* ---- plan editor ---- */
 .tabs { display: flex; gap: 6px; padding: 2px 0 8px; }
 .tab { flex: 0 0 auto; min-height: 40px; padding: 0 12px; font: 700 14px/1 var(--display); letter-spacing: .03em;
