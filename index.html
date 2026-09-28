@@ -33,6 +33,7 @@
     <p id="plan-fit" class="hint"></p>
     <div class="actions tight">
       <button class="secondary" id="btn-plan-new">New plan</button>
+      <button class="secondary" id="btn-plan-import">Import plan</button>
     </div>
   </div>
 
@@ -100,6 +101,11 @@
     <button class="primary" id="btn-planner-save">Save plan</button>
     <button class="link danger" id="btn-planner-delete">Delete</button>
   </div>
+  <div class="actions tight">
+    <button class="secondary" id="btn-planner-print" hidden>Print</button>
+    <button class="secondary" id="btn-planner-share" hidden>Share plan</button>
+  </div>
+  <p id="planner-share-hint" class="hint center" hidden>Share sends a file the other coach can open in Game Time with Import plan.</p>
 </section>
 
 <!-- ============ GAME ============ -->
@@ -187,6 +193,7 @@
   </div>
   <div class="actions">
     <button class="secondary" id="btn-export">Export CSV</button>
+    <button class="secondary" id="btn-import">Import CSV</button>
     <button class="link danger" id="btn-season-reset">Reset season</button>
   </div>
 </section>
@@ -236,6 +243,20 @@
     <ul id="modal-list" class="roster"></ul>
     <div id="modal-note" hidden></div>
     <button id="modal-close" class="primary">Done</button>
+  </div>
+</div>
+
+<input type="file" id="file-input" accept=".csv,.json,text/csv,application/json,text/plain" hidden>
+
+<div id="paste-modal" class="modal" hidden>
+  <div class="modal-box">
+    <h2 id="paste-title">Paste</h2>
+    <p class="hint" id="paste-hint"></p>
+    <textarea id="paste-text" rows="8" placeholder="Paste here"></textarea>
+    <div class="actions">
+      <button class="primary" id="btn-paste-go">Import</button>
+      <button class="link" id="btn-paste-close">Cancel</button>
+    </div>
   </div>
 </div>
 

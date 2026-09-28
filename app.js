@@ -1619,12 +1619,33 @@ function adaptDraftToSquad() {
   if (!d) return;
   const ids = presentIds();
   if (ids.length < ON_FIELD) return;
+  // Rebuild outright when someone available has no place in the plan at all — filling the
+  // gaps left by a departure can never put a returning player back on the sheet.
+  const used = new Set();
+  d.blocks.forEach(b => Object.values(b.slots || {}).forEach(id => used.add(id)));
+  if (ids.some(id => !used.has(id))) {
+    const first = d.blocks[0] ? Object.values(d.blocks[0].slots).filter(id => ids.includes(id)) : [];
+    const gk0 = d.blocks[0] && ids.includes(d.blocks[0].slots.GK) ? d.blocks[0].slots.GK : null;
+    const plan = planFrom(Object.assign(kickoffPlanInputs(), {
+      S: d.subsPerHalf, starters: first.length === ON_FIELD ? first : [], h1gk: gk0,
+    }));
+    d.blocks = plan.blocks.map(b => ({ index: b.index, slots: Object.assign({}, b.slots) }));
+    d.filled = null;
+    save();
+    return;
+  }
+  // Minutes accumulate block by block, so a gap left by an absent player goes to whoever
+  // has had least so far. Without this every block fills with the same names and the
+  // rotation collapses.
   const minutes = seedMinutes(ids);
+  const L = blockLen(d.subsPerHalf);
   let prev = null;
   d.blocks = d.blocks.map(b => {
     const pb = plannedBlockFor({ blocks: [b] }, b.index, ids, minutes, prev);
-    prev = pb ? pb.slots : prev;
-    return { index: b.index, slots: pb ? pb.slots : b.slots };
+    const slots = pb ? pb.slots : b.slots;
+    Object.values(slots).forEach(id => { minutes[id] = (minutes[id] || 0) + L; });
+    prev = slots;
+    return { index: b.index, slots };
   });
   d.filled = null;
   save();
@@ -1672,6 +1693,8 @@ function renderPlanner() {
   $('planner-mins').innerHTML = '<tr><th>Player</th><th>Minutes</th></tr>' + sorted.map(id =>
     '<tr><td>' + esc(nameOf(id)) + '</td><td>' + fmtMin(mins[id] || 0) + '</td></tr>').join('');
   $('btn-planner-delete').hidden = !d.id;
+  // Printing and sharing need a saved plan, so they appear once it has one
+  ['btn-planner-print', 'btn-planner-share', 'planner-share-hint'].forEach(x => { $(x).hidden = !d.id; });
   $('btn-planner-save').disabled = presentIds().length < ON_FIELD;
   $('use-carry').checked = state.useCarryOver;
   if (!$('plan-card').hidden) renderPlan();
@@ -1803,20 +1826,23 @@ const csvMin = m => (Math.round((m || 0) * 100) / 100).toFixed(2);
 
 // One row per player per game, then a season total per player. Minutes are decimal so
 // they add up in a spreadsheet.
+const CSV_HEAD = ['Game', 'Date', 'Subs per half', 'Player ID', 'Player',
+  'Minutes', 'Fair share', 'Difference', 'Available'].concat(POS.map(P => P.label));
+
 function seasonCsv() {
-  const head = ['Game', 'Date', 'Player', 'Minutes', 'Fair share', 'Difference', 'Available']
-    .concat(POS.map(P => P.label));
-  const rows = [head];
+  const rows = [CSV_HEAD];
   state.history.forEach((h, i) => {
     const ids = h.players || Object.keys(h.minutes);
     ids.forEach(id => {
       const pm = (h.posMinutes || {})[id] || {};
       const name = (h.names || {})[id] || nameOf(id);
-      rows.push([i + 1, h.date, name, csvMin(h.minutes[id]), csvMin((h.shares || {})[id]),
+      rows.push([i + 1, h.date, h.subsPerHalf || '', id, name,
+        csvMin(h.minutes[id]), csvMin((h.shares || {})[id]),
         csvMin(h.minutes[id] - ((h.shares || {})[id] || 0)), csvMin((h.avail || {})[id])]
         .concat(POS.map(P => csvMin(pm[P.id] || 0))));
     });
   });
+  // Season totals at the end, so the file reads on its own. Import skips these rows.
   const seasonPos = seasonPosMinsAll();
   state.roster.forEach(p => {
     let mins = 0, fair = 0, avail = 0, games = 0;
@@ -1825,36 +1851,167 @@ function seasonCsv() {
       games++; mins += h.minutes[p.id]; fair += (h.shares || {})[p.id] || 0; avail += (h.avail || {})[p.id] || 0;
     });
     if (!games) return;
-    rows.push(['Season total', games + ' games', p.name, csvMin(mins), csvMin(fair), csvMin(mins - fair), csvMin(avail)]
+    rows.push(['Season total', games + ' games', '', p.id, p.name,
+      csvMin(mins), csvMin(fair), csvMin(mins - fair), csvMin(avail)]
       .concat(POS.map(P => csvMin((seasonPos[p.id] || {})[P.id] || 0))));
   });
   return rows.map(r => r.map(csvCell).join(',')).join('\r\n');
 }
 
-async function exportSeasonCsv() {
-  if (!state.history.length) return;
-  const csv = seasonCsv();
-  const name = 'game-time-season-' + new Date().toISOString().slice(0, 10) + '.csv';
-  // Phones do best with the share sheet; fall back to a download, then to copy-and-paste
+// --- reading a season back in ---
+function parseCsv(text) {
+  const rows = [];
+  let row = [], field = '', quoted = false;
+  const src = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (quoted) {
+      if (c === '"') { if (src[i + 1] === '"') { field += '"'; i++; } else quoted = false; }
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(c => c !== ''));
+}
+
+// Rebuild game history from an exported file. Season totals are derived, so those rows
+// are ignored. Throws with a plain message when the file isn't one of ours.
+function seasonFromCsv(text) {
+  const rows = parseCsv(text);
+  if (!rows.length) throw new Error('That file is empty.');
+  const head = rows[0].map(h => h.trim());
+  const col = {};
+  CSV_HEAD.forEach(h => { col[h] = head.indexOf(h); });
+  ['Game', 'Date', 'Player ID', 'Player', 'Minutes'].forEach(h => {
+    if (col[h] < 0) throw new Error('This does not look like a Game Time export — no “' + h + '” column.');
+  });
+  const num = v => { const n = parseFloat(v); return isFinite(n) ? n : 0; };
+  const byGame = new Map();
+  rows.slice(1).forEach(r => {
+    const tag = (r[col.Game] || '').trim();
+    if (!/^\d+$/.test(tag)) return;                     // skip the season-total rows
+    if (!byGame.has(tag)) byGame.set(tag, {
+      id: 'g' + tag + '-' + Date.now(), date: (r[col.Date] || '').trim(),
+      subsPerHalf: num(r[col['Subs per half']]) || 3,
+      players: [], names: {}, minutes: {}, shares: {}, avail: {}, posMinutes: {}, prefs: {},
+      plan: [], log: [],
+    });
+    const g = byGame.get(tag);
+    const id = (r[col['Player ID']] || '').trim() || 'p?' + g.players.length;
+    if (g.players.includes(id)) return;
+    g.players.push(id);
+    g.names[id] = (r[col.Player] || '').trim();
+    g.minutes[id] = num(r[col.Minutes]);
+    g.shares[id] = col['Fair share'] >= 0 ? num(r[col['Fair share']]) : 0;
+    g.avail[id] = col.Available >= 0 ? num(r[col.Available]) : GAME_MIN;
+    const pm = {};
+    POS.forEach(P => { const v = col[P.label] >= 0 ? num(r[col[P.label]]) : 0; if (v > 0) pm[P.id] = v; });
+    g.posMinutes[id] = pm;
+    g.prefs[id] = (byId(id) || {}).prefs || [];
+  });
+  const games = [...byGame.entries()].sort((a, c) => +a[0] - +c[0]).map(e => e[1]);
+  if (!games.length) throw new Error('No games found in that file.');
+  return games;
+}
+
+// Share sheet first (best on a phone), then a download, then copy-and-paste.
+async function handOff(text, filename, mime, fallback) {
   try {
-    const file = new File([csv], name, { type: 'text/csv' });
+    const file = new File([text], filename, { type: mime });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({ files: [file], title: 'Season data' });
+      await navigator.share({ files: [file], title: filename });
       return;
     }
   } catch (e) {
     if (e && e.name === 'AbortError') return;
   }
   try {
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
     const a = document.createElement('a');
-    a.href = url; a.download = name;
+    a.href = url; a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
     return;
   } catch (e) { /* fall through */ }
-  showCsvText(csv);
+  fallback(text);
 }
+
+// --- sharing a game plan so another phone can load it ---
+function planFile(pl) {
+  const used = new Set();
+  pl.blocks.forEach(b => Object.values(b.slots || {}).forEach(id => used.add(id)));
+  return JSON.stringify({
+    app: 'game-time', kind: 'plan', v: 1,
+    plan: { name: pl.name, subsPerHalf: pl.subsPerHalf, blocks: pl.blocks, savedAt: pl.savedAt },
+    players: [...used].map(id => {
+      const p = byId(id) || {};
+      return { id, name: p.name || id, prefs: (p.prefs || []).slice() };
+    }),
+  }, null, 2);
+}
+
+// Take a shared plan in: match its players to this phone's roster by id, then by name,
+// and rename any that don't line up so the plan still reads correctly.
+function importPlanFile(text) {
+  let data;
+  try { data = JSON.parse(text); } catch (e) { alert('That file is not a game plan.'); return false; }
+  if (!data || data.kind !== 'plan' || !data.plan || !Array.isArray(data.plan.blocks)) {
+    alert('That file is not a game plan.'); return false;
+  }
+  const map = {}, renamed = [], missing = [];
+  (data.players || []).forEach(sp => {
+    let mine = byId(sp.id);
+    if (!mine || mine.name !== sp.name) {
+      const byName = state.roster.find(p => p.name.toLowerCase() === String(sp.name).toLowerCase());
+      if (byName) mine = byName;
+    }
+    if (mine) { map[sp.id] = mine.id; if (mine.name !== sp.name) renamed.push(sp.name + ' → ' + mine.name); }
+    else missing.push(sp.name);
+  });
+  const blocks = data.plan.blocks.map(b => {
+    const slots = {};
+    Object.keys(b.slots || {}).forEach(sid => { const to = map[b.slots[sid]]; if (to) slots[sid] = to; });
+    return { index: b.index, slots };
+  });
+  const note = (renamed.length ? '\n\nMatched by name: ' + renamed.join(', ') : '') +
+    (missing.length ? '\n\nNot on your roster, their spots will be filled: ' + missing.join(', ') : '');
+  if (!confirm('Add “' + (data.plan.name || 'Shared plan') + '” to your plans?' + note)) return false;
+  const rec = {
+    id: 'pl' + Date.now(), name: (data.plan.name || 'Shared plan').slice(0, 40),
+    subsPerHalf: data.plan.subsPerHalf || 3, playerIds: [...new Set(Object.values(map))],
+    blocks, savedAt: new Date().toISOString().slice(0, 10),
+  };
+  state.plans.push(rec);
+  state.activePlanId = rec.id;
+  save(); renderSetup();
+  alert('“' + rec.name + '” added and selected for today.');
+  return true;
+}
+
+async function exportSeasonCsv() {
+  if (!state.history.length) return;
+  await handOff(seasonCsv(), 'game-time-season-' + new Date().toISOString().slice(0, 10) + '.csv',
+    'text/csv', showCsvText);
+}
+function importSeasonCsv(text) {
+  let games;
+  try { games = seasonFromCsv(text); }
+  catch (e) { alert(e.message); return false; }
+  const players = new Set();
+  games.forEach(g => g.players.forEach(id => players.add(id)));
+  if (!confirm('Import ' + games.length + ' game' + (games.length === 1 ? '' : 's') + ' for ' +
+      players.size + ' players?\n\nThis replaces the season history on this phone. The sub-by-sub log is not in a CSV, so imported games show totals and positions only.')) return false;
+  state.history = games;
+  recomputeCarryOver();
+  save();
+  renderSeason();
+  alert('Imported ' + games.length + ' game' + (games.length === 1 ? '' : 's') + '.');
+  return true;
+}
+
 function showCsvText(csv) {
   $('csv-text').value = csv;
   $('csv-modal').hidden = false;
@@ -1911,7 +2068,11 @@ function renderGameDetail(key) {
     return '<li><b>' + (Math.abs(e.t - HALF_MIN) < 1e-6 ? 'Halftime' : atClock(e.t)) + '</b> — ' + swapLineHtml(d) + '</li>';
   }).join('') || '<li class="muted">No subs recorded.</li>';
   // Planned grid (what the app suggested before kickoff)
-  const plan = (h.plan || []).map(b => ({ index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on: b.on, gk: b.gk, slots: b.slots || {}, bench: [] }));
+  const plan = (h.plan || []).map(b => {
+    const slots = b.slots || {};
+    const on = b.on || Object.values(slots);
+    return { index: b.index, half: b.index <= S ? 1 : 2, start: b.index * L, end: (b.index + 1) * L, on, gk: b.gk || slots.GK, slots, bench: [] };
+  });
   const planTotals = {};
   ids.forEach(id => { planTotals[id] = plan.filter(b => b.on.includes(id)).length * L; });
   $('gd-plan-grid').innerHTML = plan.length ? planGridHtml(ids, plan, S, planTotals, -1) : '<tr><td class="muted">No plan saved for this game.</td></tr>';
@@ -2002,6 +2163,54 @@ $('planner-pitch').addEventListener('click', e => {
 });
 $('psubs-minus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf - 1); renderPlanner(); });
 $('psubs-plus').addEventListener('click', () => { setDraftSubs(state.draft.subsPerHalf + 1); renderPlanner(); });
+// Ask for a file, and fall back to pasting when the picker is unavailable
+let pendingImport = null;
+function askForFile(kind) {
+  pendingImport = kind;
+  const inp = $('file-input');
+  inp.value = '';
+  try { inp.click(); } catch (e) { openPaste(kind); }
+}
+function openPaste(kind) {
+  pendingImport = kind;
+  $('paste-title').textContent = kind === 'plan' ? 'Paste a game plan' : 'Paste season data';
+  $('paste-hint').textContent = kind === 'plan'
+    ? 'Paste the contents of a shared plan file.'
+    : 'Paste the contents of an exported CSV.';
+  $('paste-text').value = '';
+  $('paste-modal').hidden = false;
+}
+function takeImport(text) {
+  const ok = pendingImport === 'plan' ? importPlanFile(text) : importSeasonCsv(text);
+  if (ok) { $('paste-modal').hidden = true; if (pendingImport === 'plan') show('setup'); }
+}
+$('file-input').addEventListener('change', e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => takeImport(String(r.result));
+  r.onerror = () => openPaste(pendingImport);
+  r.readAsText(f);
+});
+$('btn-paste-go').addEventListener('click', () => {
+  const v = $('paste-text').value.trim();
+  if (v) takeImport(v);
+});
+$('btn-paste-close').addEventListener('click', () => { $('paste-modal').hidden = true; });
+$('btn-plan-import').addEventListener('click', () => askForFile('plan'));
+$('btn-import').addEventListener('click', () => askForFile('season'));
+$('btn-planner-share').addEventListener('click', async () => {
+  const pl = planById(state.draft && state.draft.id);
+  if (!pl) return;
+  await handOff(planFile(pl), pl.name.replace(/[^\w -]+/g, '').trim().replace(/\s+/g, '-') + '.json',
+    'application/json', txt => { $('paste-title').textContent = 'Game plan'; $('paste-hint').textContent = 'Copy this and send it to the other coach.'; $('paste-text').value = txt; $('paste-modal').hidden = false; $('btn-paste-go').hidden = true; });
+});
+$('btn-planner-print').addEventListener('click', () => {
+  renderPlan();
+  $('btn-plan').textContent = 'Hide whole plan';
+  document.body.classList.add('printing');
+  setTimeout(() => { window.print(); document.body.classList.remove('printing'); }, 60);
+});
 $('btn-planner-fill').addEventListener('click', () => { autoFillFrom(state.draft.block); renderPlanner(); });
 $('btn-planner-save').addEventListener('click', () => { savePlan(); renderSetup(); show('setup'); });
 $('btn-planner-delete').addEventListener('click', () => {

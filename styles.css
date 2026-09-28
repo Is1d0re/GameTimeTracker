@@ -313,7 +313,7 @@ table.summary.pos th, table.summary.pos td { padding: 8px 6px; }
 table.summary.pos td:first-child, table.summary.pos th:first-child { position: sticky; left: 0; background: var(--paper); text-align: left; }
 table.summary.pos .zero { color: var(--line); }
 table.summary.pos .total { font-weight: 700; }
-#csv-text { width: 100%; font: 400 12px/1.4 ui-monospace, Menlo, Consolas, monospace; border: 2px solid var(--line); border-radius: var(--radius); padding: 8px; resize: vertical; }
+#paste-text, #csv-text { width: 100%; font: 400 12px/1.4 ui-monospace, Menlo, Consolas, monospace; border: 2px solid var(--line); border-radius: var(--radius); padding: 8px; resize: vertical; }
 table.summary .pos { color: var(--on); font-weight: 700; }
 
 /* ---- modal ---- */
@@ -326,4 +326,20 @@ table.summary .pos { color: var(--on); font-weight: 700; }
 @media (max-width: 380px) {
   #clock-time { font-size: 60px; }
   .sub-cell { font-size: 19px; padding: 7px 9px; }
+}
+
+/* ---- printing a game plan ---- */
+@media print {
+  body { background: #fff; padding: 0; }
+  .view { display: none !important; }
+  #view-planner { display: block !important; }
+  #view-planner > *:not(#plan-card):not(.bar) { display: none !important; }
+  .bar button, .actions, .modal { display: none !important; }
+  #plan-card { display: block !important; border: 0; padding: 0; }
+  .scroll-x { overflow: visible; margin: 0; padding: 0; }
+  table.plan { font-size: 10px; width: 100%; }
+  table.plan th, table.plan td { padding: 3px 4px; }
+  table.plan td.on { background: #e3f4e8 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  table.plan td.gk { background: #fff4c2 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .swaps { font-size: 11px; }
 }

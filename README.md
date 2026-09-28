@@ -36,7 +36,7 @@ The home screen is just your game plans. Everything about a game — the squad, 
    - **Subs per half** — sets the block boundaries. Changing it re-blocks the plan and keeps your starting eleven. Water breaks stay at 12:30 and 37:30 whatever you pick; a shift boundary that lands on one is marked 💧.
    - **Blocks** — the tabs run across the whole match (0:00, 6:15, … 25:00 HT, 31:15 …). Pick a block and set the field: tap a position, then a bench player to put them there; tap two positions to swap. **Auto-fill later blocks** finishes the rotation from wherever you are, and turns green to confirm.
    - **Projected minutes** shows what each player gets and the gap between most and least.
-   - **Save plan**, then **Start game** from the home screen.
+   - **Save plan**, then **Start game** from the home screen. Once saved, **Print** gives you a one-page sheet for the sideline, and **Share plan** sends a file another coach can text back into their own copy with **Import plan** on the home screen.
 3. Tap **Start** when the ref blows. **Water break** stops the clock and says so; **Resume** restarts it. At halftime you get **Start 2nd half**, or **Play on** if the ref hasn't blown yet. The clock runs straight through — the second half starts at 25:00 — and keeps going past 50:00 until you tap **End game**.
 4. When the phone buzzes, the board shows one row per swap: who comes off, the position, who goes on. Tap **Apply** once the kids have swapped.
 5. To change the lineup, tap **Edit lineup** and set the field the way you want it, then **Sub now** for an unplanned change or **Save for 31:15** to hold it for the next whistle. Outside edit mode, tapping does nothing, so a stray tap can't disturb the lineup.
@@ -48,7 +48,9 @@ The home screen is just your game plans. Everything about a game — the squad, 
 
 Minutes in each position appear under every player's name on the game summary, and the **Season** screen has a **Time by position** table for the whole season — a column per position, red where it isn't one the player is marked for.
 
-**Export CSV** on the Season screen hands off the whole record: one row per player per game (minutes, fair share, difference, minutes available, and minutes in each position), then a season total per player. On a phone it opens the share sheet; on a computer it downloads. If neither works, the text appears on screen to copy into a spreadsheet.
+Tap any game in the **Games** list to see what actually happened: the lineup for every block, the sub-by-sub log with times, and the plan you went in with.
+
+**Export CSV** hands off the whole record: one row per player per game (game number, date, subs per half, player, minutes, fair share, difference, minutes available, and minutes in each position), then a season total per player. **Import CSV** reads that file back, replacing the season history on this phone and recalculating the balance — handy for moving to a new phone or restoring a backup. The sub-by-sub log isn't in a CSV, so imported games show totals and positions but not the block-by-block record. On a phone both open the share sheet; on a computer they download. If neither works, the text appears on screen to copy and paste.
 
 ## Deploy (for whoever hosts it)
 
