@@ -1171,6 +1171,18 @@ function liveForecast() {
       blocks = past.concat([current], sub.plan.blocks);
       projected = sub.plan.projected;
     }
+  } else {
+    // Last shift of the game, and all of stoppage time: there is no later block to plan
+    // for, but the coach can still want a sub — a tired player, a knock, a late arrival.
+    // Offer a change that takes effect now, against the block we are already in.
+    const ovNow = validOverride(b, ids);
+    const slots = ovNow ? ovNow.slots : Object.assign({}, g.slots || {});
+    const on2 = Object.values(slots);
+    const blk = {
+      index: b, half: b < HI ? 1 : 2, start: min, end: blockEnd(sch, b), on: on2,
+      gk: slots.GK || gk, bench: ids.filter(id => !on2.includes(id)), slots,
+    };
+    next = { block: blk, diff: diffForSlots(slots, onField, gk), manual: true, fromPlan: false, now: true };
   }
   // Projected final minutes this game, and each player's fair share of them weighted by
   // how long they are (and will be) available. "Behind" = ends more than a block short
@@ -1309,7 +1321,12 @@ function renderGame() {
   const previewEl = $('clock-preview');
   const problem = overrideProblem(fc);
   const canEdit = !!next && g.phase !== 'done';
-  const whenLabel = next ? (next.block.index === halfIndex(sch) ? 'at halftime' : 'at ' + atClock(next.block.start)) : '';
+  // In the last shift there is no later block, so an edit can only take effect right away
+  const immediate = !!(next && next.now);
+  const whenLabel = !next ? ''
+    : immediate ? 'now'
+      : next.block.index === halfIndex(sch) ? 'at halftime'
+        : 'at ' + atClock(next.block.start);
   previewEl.classList.toggle('editing', !!g.editNext);
   if (g.editNext && next) {
     const hasChange = next.diff.off.length || next.diff.on.length || next.diff.gk;
@@ -1317,14 +1334,18 @@ function renderGame() {
       '<span class="edit-actions"><button class="link" id="btn-edit-reset">Reset to plan</button><button class="link" id="btn-edit-done">Cancel</button></span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots) +
       '<div class="board-actions"><button class="primary" id="btn-sub-now"' + (problem || !hasChange ? ' disabled' : '') + '>Sub now</button>' +
-      '<button class="secondary" id="btn-edit-stage"' + (problem || !hasChange ? ' disabled' : '') + '>Save for ' + esc(whenLabel.replace(/^at /, '')) + '</button></div>');
+      (immediate ? '' : '<button class="secondary" id="btn-edit-stage"' + (problem || !hasChange ? ' disabled' : '') + '>Save for ' + esc(whenLabel.replace(/^at /, '')) + '</button>') +
+      '</div>');
     previewEl.hidden = false;
   } else if (next && !g.pending && (next.diff.off.length || next.diff.on.length || next.diff.gk)) {
     setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">' + (next.fromPlan ? 'from your plan' : next.manual ? 'edited by you' : 'auto') + '</span></div>' +
       boardPanelsHtml(next.diff, problem ? '<span class="warn">' + esc(problem) + '</span>' : '', next.block.slots, g.slots));
     previewEl.hidden = false;
   } else if (canEdit && !g.pending) {
-    setHtml(previewEl, '<div class="board-strip"><span>Next sub ' + esc(whenLabel) + '</span><span class="muted">no change planned</span></div>');
+    const fullTime = g.phase === 'h2' && min >= GAME_MIN;
+    setHtml(previewEl, '<div class="board-strip"><span>' +
+      (immediate ? (fullTime ? 'Stoppage time' : 'Last shift') : 'Next sub ' + esc(whenLabel)) + '</span>' +
+      '<span class="muted">' + (immediate ? 'no more subs scheduled' : 'no change planned') + '</span></div>');
     previewEl.hidden = false;
   } else {
     previewEl.hidden = true;
@@ -2454,7 +2475,12 @@ $('clock-preview').addEventListener('click', e => {
 });
 $('btn-edit-mode').addEventListener('click', () => {
   const g = state.game;
-  if (g.editNext) { g.editNext = false; g.editSel = null; save(); renderGame(); } else startEditNext();
+  if (g.editNext) {
+    // An edit aimed at the block we are already in has no later moment to fire, so closing
+    // edit mode without applying it drops it rather than leaving a sub that never happens
+    if (g.nextOverride && g.nextOverride.block === currentBlock(g)) g.nextOverride = null;
+    g.editNext = false; g.editSel = null; save(); renderGame();
+  } else startEditNext();
 });
 $('btn-live-plan').addEventListener('click', () => {
   const card = $('live-plan-card');
